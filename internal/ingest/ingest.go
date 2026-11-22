@@ -61,22 +61,24 @@ type Getter interface {
 
 // Sample is one panel sample as polled.
 type Sample struct {
-	Cursor     uint64            `json:"cursor"`
-	NodeID     uint              `json:"node_id"`
-	DateTime   int64             `json:"date_time"`
-	Inbound    string            `json:"inbound"`
-	Network    string            `json:"network"`
-	Prefix     string            `json:"prefix"`
-	SourceKind string            `json:"source_kind"`
-	Accepted   uint32            `json:"accepted"`
-	Failed     map[string]uint32 `json:"failed"`
-	Authed     uint32            `json:"authed"`
-	EarlyClose uint32            `json:"early_close"`
-	DurP50     uint32            `json:"dur_p50"`
-	RTTP50     uint32            `json:"rtt_p50"`
-	RetransPPM uint32            `json:"retrans_ppm"`
-	Up         int64             `json:"up"`
-	Down       int64             `json:"down"`
+	Cursor       uint64            `json:"cursor"`
+	NodeID       uint              `json:"node_id"`
+	DateTime     int64             `json:"date_time"`
+	Inbound      string            `json:"inbound"`
+	Network      string            `json:"network"`
+	Prefix       string            `json:"prefix"`
+	SourceKind   string            `json:"source_kind"`
+	Accepted     uint32            `json:"accepted"`
+	Failed       map[string]uint32 `json:"failed"`
+	Authed       uint32            `json:"authed"`
+	EarlyClose   uint32            `json:"early_close"`
+	Replayed     uint32            `json:"replayed"`
+	FollowUpFail uint32            `json:"follow_up_fail"`
+	DurP50       uint32            `json:"dur_p50"`
+	RTTP50       uint32            `json:"rtt_p50"`
+	RetransPPM   uint32            `json:"retrans_ppm"`
+	Up           int64             `json:"up"`
+	Down         int64             `json:"down"`
 }
 
 // NodeState is one node's telemetry state as the panel reports it.
@@ -285,6 +287,8 @@ func add(c *model.PathCounters, s Sample) {
 	c.Accepted += uint64(s.Accepted)
 	c.Authed += uint64(s.Authed)
 	c.EarlyClose += uint64(s.EarlyClose)
+	c.Replayed += uint64(s.Replayed)
+	c.FollowUpFail += uint64(s.FollowUpFail)
 	for class, n := range s.Failed {
 		switch class {
 		case "tls":
@@ -299,6 +303,8 @@ func add(c *model.PathCounters, s Sample) {
 			c.FailedEOF += uint64(n)
 		case "ingress_noroute":
 			c.FailedNoRoute += uint64(n)
+		case "quic_initial_bad":
+			c.FailedQUIC += uint64(n)
 		default:
 			c.FailedOther += uint64(n)
 		}
@@ -489,6 +495,9 @@ func addCounters(a, b *model.PathCounters) {
 	a.FailedEOF += b.FailedEOF
 	a.FailedOther += b.FailedOther
 	a.FailedNoRoute += b.FailedNoRoute
+	a.FailedQUIC += b.FailedQUIC
+	a.Replayed += b.Replayed
+	a.FollowUpFail += b.FollowUpFail
 	a.DurSum += b.DurSum
 	a.DurN += b.DurN
 	a.RTTSum += b.RTTSum
@@ -503,6 +512,7 @@ func addCounters(a, b *model.PathCounters) {
 var counterColumns = []string{
 	"accepted", "authed", "early_close",
 	"failed_tls", "failed_auth", "failed_timeout", "failed_reset", "failed_eof", "failed_other", "failed_no_route",
+	"failed_quic", "replayed", "follow_up_fail",
 	"dur_sum", "dur_n", "rtt_sum", "rtt_n", "retrans_sum", "retrans_n", "up", "down",
 }
 

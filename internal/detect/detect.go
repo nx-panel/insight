@@ -111,7 +111,7 @@ type Baseline struct {
 func (Baseline) TableName() string { return "path_baselines" }
 
 // Tables are this package's, for the migration.
-func Tables() []any { return []any{&Alert{}, &Baseline{}} }
+func Tables() []any { return []any{&Alert{}, &Baseline{}, &Suspicion{}} }
 
 type pathState struct {
 	degraded bool

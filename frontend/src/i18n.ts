@@ -8,6 +8,7 @@ const en = {
   nav: {
     overview: 'Overview',
     nodes: 'Nodes',
+    probing: 'Probing',
     alerts: 'Alerts',
     security: 'Security',
     signOut: 'Sign out',
@@ -35,6 +36,8 @@ const en = {
       'The network database is not loaded yet: client networks show as unknown until the first download finishes.',
     outage:
       '{asn} is cut off: every path to it is down at once. Probably a shutdown or a whitelist on that network — nothing to rotate.',
+    probed: '{n} endpoints are being probed: rotate them before they are blocked.',
+    seeProbing: 'What to do',
     suggestions: 'Blocked paths',
     suggestionsHint:
       'Subscriptions already put the working links first for these networks. To act: move these users to a working node or inbound, or change the blocked node’s address or the inbound’s port or SNI.',
@@ -96,6 +99,27 @@ const en = {
     emptyKeeps: 'An empty field keeps the database’s answer.',
     clear: 'Use the database',
   },
+  probing: {
+    title: 'Probing',
+    intro:
+      'Before a censor blocks a server it often tests it: it replays a handshake it saw, or tries the port right after a real user connected. The nodes count these signs; nothing on the node reacts to them. Each node and inbound gets a score from 0 to 100 over the last six hours.',
+    rotate:
+      'is being probed. Rotate it before it is blocked: in the panel, change this inbound’s port or SNI (with REALITY, its target site too), or give the node another address, and let subscriptions update.',
+    empty: 'No signs of probing in the last six hours.',
+    endpoint: 'Node and inbound',
+    score: 'Score',
+    replayed: 'Replayed handshakes',
+    followUp: 'Failures right after a user',
+    normally: '(normally {n})',
+    scans: 'Scans',
+    scanCounts: 'unknown SNI {sni}, bad QUIC {quic}',
+    probedSince: 'Probed since',
+    lastEpisode: 'last {at}',
+    followed: 'Blocked after?',
+    yes: 'yes',
+    no: 'no',
+    how: 'A replayed handshake adds 20 (up to 80): a real client never sends the same one twice. Failures right after real users’ sessions add 20 when there are at least 10 and three times this inbound’s usual. At 40 an alert goes out. “Blocked after?” says whether a path on it degraded within 48 hours of the alert: how the score is checked against what really happened.',
+  },
   alerts: {
     title: 'Alerts',
     intro:
@@ -105,11 +129,13 @@ const en = {
     kind: {
       path: { degraded: 'Path degraded', recovered: 'Path recovered' },
       asn: { outage: 'Network cut off', recovered: 'Network back' },
+      endpoint: { probed: 'Endpoint probed' },
     },
     failures: '{p}% of connections failed the handshake (normally {n}%).',
     drop: '{p} connections an hour got through (normally {n}).',
     early: '{p}% of sessions were cut within seconds (normally {n}%).',
     outageWhy: 'Every path to it was down on {n} nodes at once.',
+    probedWhy: 'Score {score}: {n} replayed handshakes in six hours.',
   },
   security: {
     title: 'Security',
@@ -171,6 +197,7 @@ const fa: Messages = {
   nav: {
     overview: 'نمای کلی',
     nodes: 'نودها',
+    probing: 'پروب',
     alerts: 'هشدارها',
     security: 'امنیت',
     signOut: 'خروج',
@@ -198,6 +225,8 @@ const fa: Messages = {
       'پایگاه دادهٔ شبکه‌ها هنوز بارگذاری نشده: تا اولین دانلود تمام نشود شبکهٔ کلاینت‌ها ناشناخته دیده می‌شود.',
     outage:
       '{asn} قطع است: همهٔ مسیرها به آن هم‌زمان از کار افتاده‌اند. احتمالاً قطع اینترنت یا لیست سفید روی همان شبکه است — چیزی برای چرخاندن نیست.',
+    probed: '{n} نقطهٔ اتصال زیر پروب است: پیش از مسدود شدن عوضشان کنید.',
+    seeProbing: 'چه باید کرد',
     suggestions: 'مسیرهای مسدود',
     suggestionsHint:
       'اشتراک‌ها همین حالا لینک‌های کارا را برای این شبکه‌ها جلو می‌آورند. برای اقدام: این کاربران را به نود یا inbound سالم ببرید، یا آدرس نود مسدود یا پورت یا SNI آن inbound را عوض کنید.',
@@ -257,6 +286,27 @@ const fa: Messages = {
     emptyKeeps: 'خانهٔ خالی پاسخ پایگاه داده را نگه می‌دارد.',
     clear: 'استفاده از پایگاه داده',
   },
+  probing: {
+    title: 'پروب',
+    intro:
+      'سانسورچی پیش از مسدود کردن یک سرور اغلب آن را آزمایش می‌کند: handshakeی را که دیده دوباره می‌فرستد، یا درست بعد از وصل شدن یک کاربر واقعی پورت را امتحان می‌کند. نودها این نشانه‌ها را می‌شمارند و هیچ واکنشی به آن‌ها نشان نمی‌دهند. هر نود و inbound برای شش ساعت گذشته امتیازی از ۰ تا ۱۰۰ می‌گیرد.',
+    rotate:
+      'زیر پروب است. پیش از آنکه مسدود شود عوضش کنید: در پنل پورت یا SNI این inbound را تغییر دهید (در REALITY سایت مقصد را هم)، یا به نود آدرس دیگری بدهید و بگذارید اشتراک‌ها به‌روز شوند.',
+    empty: 'در شش ساعت گذشته نشانه‌ای از پروب نبود.',
+    endpoint: 'نود و inbound',
+    score: 'امتیاز',
+    replayed: 'handshake تکراری',
+    followUp: 'شکست درست بعد از کاربر',
+    normally: '(معمولاً {n})',
+    scans: 'اسکن',
+    scanCounts: 'SNI ناشناس {sni}، QUIC نامعتبر {quic}',
+    probedSince: 'زیر پروب از',
+    lastEpisode: 'آخرین بار {at}',
+    followed: 'بعدش مسدود شد؟',
+    yes: 'بله',
+    no: 'نه',
+    how: 'هر handshake تکراری ۲۰ امتیاز می‌دهد (تا ۸۰)، چون کلاینت واقعی هیچ‌وقت یک handshake را دو بار نمی‌فرستد. شکست‌های درست بعد از جلسه‌های کاربران واقعی وقتی دست‌کم ۱۰ تا و سه برابرِ معمولِ این inbound باشند ۲۰ امتیاز می‌دهند. در ۴۰ هشدار فرستاده می‌شود. ستون «بعدش مسدود شد؟» می‌گوید آیا تا ۴۸ ساعت بعد از هشدار مسیری روی آن مختل شد؛ امتیاز با همین با واقعیت سنجیده می‌شود.',
+  },
   alerts: {
     title: 'هشدارها',
     intro:
@@ -266,11 +316,13 @@ const fa: Messages = {
     kind: {
       path: { degraded: 'مسیر مختل شد', recovered: 'مسیر برگشت' },
       asn: { outage: 'شبکه قطع است', recovered: 'شبکه برگشت' },
+      endpoint: { probed: 'زیر پروب' },
     },
     failures: '{p}٪ اتصال‌ها در handshake رد شدند (معمولاً {n}٪).',
     drop: 'ساعتی {p} اتصال رسید (معمولاً {n}).',
     early: '{p}٪ جلسه‌ها در چند ثانیه قطع شدند (معمولاً {n}٪).',
     outageWhy: 'همهٔ مسیرها به آن هم‌زمان روی {n} نود از کار افتاده بودند.',
+    probedWhy: 'امتیاز {score}: {n} handshake تکراری در شش ساعت.',
   },
   security: {
     title: 'امنیت',
@@ -329,6 +381,7 @@ const ru: Messages = {
   nav: {
     overview: 'Обзор',
     nodes: 'Узлы',
+    probing: 'Зондирование',
     alerts: 'Оповещения',
     security: 'Безопасность',
     signOut: 'Выйти',
@@ -356,6 +409,8 @@ const ru: Messages = {
       'База сетей ещё не загружена: сети клиентов неизвестны, пока не закончится первая загрузка.',
     outage:
       '{asn} отрезан: все пути к нему не работают одновременно. Скорее всего, отключение или белый список в этой сети — менять нечего.',
+    probed: 'Зондируют точек подключения: {n}. Смените их до блокировки.',
+    seeProbing: 'Что делать',
     suggestions: 'Заблокированные пути',
     suggestionsHint:
       'Подписки уже ставят рабочие ссылки первыми для этих сетей. Что сделать: перевести этих пользователей на рабочий узел или inbound, либо сменить адрес заблокированного узла или порт либо SNI inbound.',
@@ -416,6 +471,27 @@ const ru: Messages = {
     emptyKeeps: 'Пустое поле оставляет ответ базы.',
     clear: 'Брать из базы',
   },
+  probing: {
+    title: 'Зондирование',
+    intro:
+      'Прежде чем заблокировать сервер, цензор часто проверяет его: повторяет увиденное рукопожатие или пробует порт сразу после подключения настоящего пользователя. Узлы считают эти признаки и никак на них не реагируют. Каждый узел и inbound получает оценку от 0 до 100 за последние шесть часов.',
+    rotate:
+      'зондируют. Смените его до блокировки: в панели поменяйте порт или SNI этого inbound (для REALITY — и целевой сайт) или дайте узлу другой адрес, и пусть подписки обновятся.',
+    empty: 'За последние шесть часов признаков зондирования нет.',
+    endpoint: 'Узел и inbound',
+    score: 'Оценка',
+    replayed: 'Повторённые рукопожатия',
+    followUp: 'Сбои сразу после пользователя',
+    normally: '(обычно {n})',
+    scans: 'Сканирование',
+    scanCounts: 'неизвестный SNI {sni}, неверный QUIC {quic}',
+    probedSince: 'Зондируют с',
+    lastEpisode: 'последний раз {at}',
+    followed: 'Заблокирован после?',
+    yes: 'да',
+    no: 'нет',
+    how: 'Каждое повторённое рукопожатие даёт 20 (до 80): настоящий клиент никогда не отправляет одно и то же дважды. Сбои сразу после сессий настоящих пользователей дают 20, если их не меньше 10 и втрое больше обычного для этого inbound. При 40 отправляется оповещение. «Заблокирован после?» показывает, деградировал ли путь на нём в течение 48 часов после оповещения: так оценка сверяется с тем, что произошло.',
+  },
   alerts: {
     title: 'Оповещения',
     intro:
@@ -425,11 +501,13 @@ const ru: Messages = {
     kind: {
       path: { degraded: 'Путь деградировал', recovered: 'Путь восстановлен' },
       asn: { outage: 'Сеть отрезана', recovered: 'Сеть снова доступна' },
+      endpoint: { probed: 'Точку зондируют' },
     },
     failures: '{p}% соединений не прошли рукопожатие (обычно {n}%).',
     drop: 'Проходило {p} соединений в час (обычно {n}).',
     early: '{p}% сессий обрывались за секунды (обычно {n}%).',
     outageWhy: 'Все пути к нему не работали одновременно на {n} узлах.',
+    probedWhy: 'Оценка {score}: {n} повторённых рукопожатий за шесть часов.',
   },
   security: {
     title: 'Безопасность',
@@ -488,6 +566,7 @@ const zh: Messages = {
   nav: {
     overview: '概览',
     nodes: '节点',
+    probing: '探测',
     alerts: '告警',
     security: '安全',
     signOut: '退出',
@@ -513,6 +592,8 @@ const zh: Messages = {
     gaps: '数据中断 {n} 次，最近一次 {at}',
     noNetinfo: '网络数据库尚未加载：首次下载完成前，客户端网络显示为未知。',
     outage: '{asn} 已被切断：到它的所有路径同时中断。很可能是该网络断网或启用白名单——无需轮换。',
+    probed: '{n} 个端点正被探测：请在被封锁前更换。',
+    seeProbing: '怎么做',
     suggestions: '被封锁的路径',
     suggestionsHint:
       '订阅已为这些网络把可用链接排在前面。可采取的措施：把这些用户迁移到可用的节点或入站，或更换被封锁节点的地址、入站的端口或 SNI。',
@@ -571,6 +652,27 @@ const zh: Messages = {
     emptyKeeps: '留空则沿用数据库的结果。',
     clear: '使用数据库',
   },
+  probing: {
+    title: '探测',
+    intro:
+      '审查者在封锁服务器之前常常先测试它：重放它看到过的握手，或在真实用户连接后立即尝试该端口。节点会统计这些迹象，但不会对其作出任何反应。每个节点和 inbound 都会得到过去六小时内 0 到 100 的评分。',
+    rotate:
+      '正在被探测。请在被封锁前更换：在面板中修改此 inbound 的端口或 SNI（REALITY 还需更换目标网站），或为节点换一个地址，然后让订阅更新。',
+    empty: '过去六小时内没有探测迹象。',
+    endpoint: '节点和 inbound',
+    score: '评分',
+    replayed: '重放握手',
+    followUp: '用户之后紧接的失败',
+    normally: '（通常 {n}）',
+    scans: '扫描',
+    scanCounts: '未知 SNI {sni}，无效 QUIC {quic}',
+    probedSince: '被探测自',
+    lastEpisode: '上次 {at}',
+    followed: '之后被封锁？',
+    yes: '是',
+    no: '否',
+    how: '每次重放握手加 20 分（最多 80）：真实客户端从不会把同一个握手发送两次。真实用户会话之后紧接着的失败在至少 10 次且达到该 inbound 平时三倍时加 20 分。达到 40 分时发送告警。“之后被封锁？”表示告警后 48 小时内其上是否有路径受阻——评分以此与实际情况对照。',
+  },
   alerts: {
     title: '告警',
     intro:
@@ -580,11 +682,13 @@ const zh: Messages = {
     kind: {
       path: { degraded: '路径受阻', recovered: '路径已恢复' },
       asn: { outage: '网络被切断', recovered: '网络已恢复' },
+      endpoint: { probed: '端点正被探测' },
     },
     failures: '{p}% 的连接握手失败（通常为 {n}%）。',
     drop: '每小时有 {p} 个连接通过（通常为 {n}）。',
     early: '{p}% 的会话在数秒内被切断（通常为 {n}%）。',
     outageWhy: '到它的所有路径同时在 {n} 个节点上中断。',
+    probedWhy: '评分 {score}：六小时内 {n} 次重放握手。',
   },
   security: {
     title: '安全',

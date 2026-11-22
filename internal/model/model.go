@@ -18,6 +18,15 @@ type PathCounters struct {
 	FailedEOF     uint64 `json:"failedEof" gorm:"column:failed_eof"`
 	FailedOther   uint64 `json:"failedOther"`
 	FailedNoRoute uint64 `json:"failedNoRoute"`
+	// FailedQUIC is datagrams to a plain QUIC inbound on a port set that no
+	// QUIC client sends (quic_initial_bad); not connections, so not part of
+	// any ratio over Accepted.
+	FailedQUIC uint64 `json:"failedQuic" gorm:"column:failed_quic"`
+
+	// Probe signals (nx-panel docs/path-telemetry.md §4.5): handshakes the
+	// node saw before, and failures soon after another network's success.
+	Replayed     uint64 `json:"replayed"`
+	FollowUpFail uint64 `json:"followUpFail"`
 
 	// DurSum is the sum of each sample's median session seconds times its
 	// authenticated count, DurN that count; RTTSum/RTTN the same for the

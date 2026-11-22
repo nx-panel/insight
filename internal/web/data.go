@@ -25,6 +25,54 @@ func (s *Server) mountData(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/nodes/{id}/override", s.signedIn(s.handleOverride))
 	mux.HandleFunc("GET /api/alerts", s.signedIn(s.handleAlerts))
 	mux.HandleFunc("GET /api/suggestions", s.signedIn(s.handleSuggestions))
+	mux.HandleFunc("GET /api/endpoints", s.signedIn(s.handleEndpoints))
+}
+
+// endpointView is one endpoint's suspicion (detect.Suspicion) with whether
+// its last probed alert was followed by a path alert on it within
+// detect.CalibrateWithin: what the score is calibrated against.
+type endpointView struct {
+	detect.Suspicion
+	// Followed is null while the last probed alert is younger than the
+	// calibration window and nothing followed yet, or there was none.
+	Followed *bool `json:"followed"`
+}
+
+// handleEndpoints is GET /api/endpoints: every endpoint with probe
+// evidence in the window or a probed episode behind it, the most suspect
+// first.
+func (s *Server) handleEndpoints(w http.ResponseWriter, _ *http.Request, _ model.Admin) {
+	var rows []detect.Suspicion
+	if err := s.db.Order("score DESC, node_id, inbound").Find(&rows).Error; err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := make([]endpointView, 0, len(rows))
+	now := time.Now().Unix()
+	for _, r := range rows {
+		v := endpointView{Suspicion: r}
+		if r.ProbedAtUnix != 0 {
+			var last []detect.Alert
+			if err := s.db.Where("kind = ? AND node_id = ? AND inbound = ?", detect.KindProbed, r.NodeID, r.Inbound).
+				Order("id DESC").Limit(1).Find(&last).Error; err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			followed, err := detect.Followed(s.db, last)
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if len(last) == 1 {
+				f := followed[last[0].ID]
+				if f || now-last[0].At > int64(detect.CalibrateWithin/time.Second) {
+					v.Followed = &f
+				}
+			}
+		}
+		out = append(out, v)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 type statusView struct {
@@ -38,6 +86,8 @@ type statusView struct {
 	Attribution string        `json:"attribution"`
 	Outages     []uint32      `json:"outages"`
 	Degraded    int           `json:"degraded"`
+	// Probed is how many endpoints are in a probed episode now.
+	Probed int64 `json:"probed"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request, _ model.Admin) {
@@ -59,6 +109,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request, _ model.Ad
 		}
 		sort.Slice(v.Outages, func(i, j int) bool { return v.Outages[i] < v.Outages[j] })
 		v.Degraded = len(s.detect.Degraded())
+	}
+	if err := s.db.Model(&detect.Suspicion{}).Where("probed = ?", true).Count(&v.Probed).Error; err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	writeJSON(w, http.StatusOK, v)
 }

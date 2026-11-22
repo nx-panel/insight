@@ -86,6 +86,7 @@ export interface Status {
   attribution: string
   outages: number[]
   degraded: number
+  probed: number
 }
 
 export interface Cell {
@@ -130,9 +131,30 @@ export interface Matrix {
   nodes: NodeInfo[]
 }
 
+// One node and inbound's probe evidence over the last six hours.
+export interface Endpoint {
+  nodeId: number
+  inbound: string
+  score: number
+  replayed: number
+  followUpFail: number
+  followNormal: number
+  noRoute: number
+  quicStray: number
+  failed: number
+  accepted: number
+  probed: boolean
+  probedAt: number
+  lastEvidence: number
+  updatedAt: number
+  // Whether a path alert on it followed its last probed alert; null while
+  // that is still open.
+  followed: boolean | null
+}
+
 export interface Alert {
   id: number
-  kind: 'path.degraded' | 'path.recovered' | 'asn.outage' | 'asn.recovered'
+  kind: 'path.degraded' | 'path.recovered' | 'asn.outage' | 'asn.recovered' | 'endpoint.probed'
   nodeId: number
   inbound: string
   asn: number
@@ -178,4 +200,5 @@ export const api = {
   alerts: (before?: number) =>
     call<Alert[]>('GET', '/alerts?limit=100' + (before ? `&before=${before}` : '')),
   suggestions: () => call<Suggestion[]>('GET', '/suggestions'),
+  endpoints: () => call<Endpoint[]>('GET', '/endpoints'),
 }

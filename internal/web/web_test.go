@@ -83,7 +83,7 @@ func (e *env) call(method, path string, body, out any) int {
 // session and answered with one.
 func TestTheAdminWebNeedsASignIn(t *testing.T) {
 	e := newEnv(t)
-	for _, p := range []string{"/api/status", "/api/matrix", "/api/nodes", "/api/alerts", "/api/suggestions"} {
+	for _, p := range []string{"/api/status", "/api/matrix", "/api/nodes", "/api/alerts", "/api/suggestions", "/api/endpoints"} {
 		if code := e.call("GET", p, nil, nil); code != http.StatusUnauthorized {
 			t.Errorf("signed out GET %s = %d", p, code)
 		}
@@ -94,7 +94,7 @@ func TestTheAdminWebNeedsASignIn(t *testing.T) {
 	if code := e.call("POST", "/api/login", map[string]string{"username": "admin", "password": "admin-secret-1"}, nil); code != http.StatusOK {
 		t.Fatalf("sign in = %d", code)
 	}
-	for _, p := range []string{"/api/status", "/api/matrix", "/api/nodes", "/api/alerts", "/api/suggestions"} {
+	for _, p := range []string{"/api/status", "/api/matrix", "/api/nodes", "/api/alerts", "/api/suggestions", "/api/endpoints"} {
 		if code := e.call("GET", p, nil, nil); code != http.StatusOK {
 			t.Errorf("signed in GET %s = %d", p, code)
 		}
@@ -165,5 +165,26 @@ func TestAlertsNewestFirst(t *testing.T) {
 	e.call("GET", "/api/alerts?before=2", nil, &got)
 	if len(got) != 1 || got[0].ID != 1 {
 		t.Fatalf("before 2 = %+v", got)
+	}
+}
+
+// TestEndpointsMostSuspectFirst: the endpoints come most suspect first, and
+// a probed endpoint whose path then degraded reads as followed.
+func TestEndpointsMostSuspectFirst(t *testing.T) {
+	e := newEnv(t)
+	e.call("POST", "/api/login", map[string]string{"username": "admin", "password": "admin-secret-1"}, nil)
+	at := time.Now().Add(-time.Hour).Unix()
+	e.db.Create(&detect.Suspicion{NodeID: 1, Inbound: "ss", Score: 20, FollowUpFail: 30})
+	e.db.Create(&detect.Suspicion{NodeID: 1, Inbound: "vless-reality", Score: 60, Replayed: 3, Probed: true, ProbedAtUnix: at})
+	e.db.Create(&detect.Alert{Kind: detect.KindProbed, NodeID: 1, Inbound: "vless-reality", At: at})
+	var got []endpointView
+	e.call("GET", "/api/endpoints", nil, &got)
+	if len(got) != 2 || got[0].Inbound != "vless-reality" || got[0].Followed != nil || got[1].Followed != nil {
+		t.Fatalf("endpoints = %+v", got)
+	}
+	e.db.Create(&detect.Alert{Kind: detect.KindDegraded, NodeID: 1, Inbound: "vless-reality", ASN: 44244, At: at + 600})
+	e.call("GET", "/api/endpoints", nil, &got)
+	if got[0].Followed == nil || !*got[0].Followed {
+		t.Fatalf("followed = %v", got[0].Followed)
 	}
 }

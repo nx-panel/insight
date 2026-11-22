@@ -277,7 +277,8 @@ func every(ctx context.Context, d time.Duration, f func()) {
 
 // pipeline wires the poll to the detector and the hints: every polled
 // sample feeds the detector's window, and after every flush the detector
-// judges and the hints are pushed.
+// judges the paths and the endpoints' probe evidence and the hints are
+// pushed.
 func pipeline(gdb *gorm.DB, net *netinfo.DB, client func() ingest.Getter, send func(context.Context, detect.Alert)) (*ingest.Ingest, *detect.Detector, *hints.Hints) {
 	det := &detect.Detector{DB: gdb, Send: send}
 	hint := &hints.Hints{DB: gdb, Prefixes: net.Prefixes, State: det, Panel: func() hints.Putter {
@@ -294,6 +295,9 @@ func pipeline(gdb *gorm.DB, net *netinfo.DB, client func() ingest.Getter, send f
 		AfterFlush: func(ctx context.Context) {
 			if err := det.Evaluate(ctx); err != nil {
 				log.Printf("detect: %v", err)
+			}
+			if err := det.EvaluateProbes(ctx); err != nil {
+				log.Printf("detect probes: %v", err)
 			}
 			if err := hint.Push(ctx); err != nil {
 				log.Printf("hints: %v", err)

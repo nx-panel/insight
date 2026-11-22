@@ -121,6 +121,7 @@ func TestASampleBecomesAnHourlyRowWithoutItsPrefix(t *testing.T) {
 	fp.add(Sample{
 		NodeID: 3, DateTime: hour + 1800, Inbound: "vless-reality", Network: "tcp", Prefix: "5.160.9.0/24",
 		SourceKind: "peer", Accepted: 5, Authed: 3, RTTP50: 250,
+		Replayed: 2, FollowUpFail: 1, Failed: map[string]uint32{"quic_initial_bad": 4},
 	})
 	if err := in.Poll(t.Context()); err != nil {
 		t.Fatal(err)
@@ -138,7 +139,8 @@ func TestASampleBecomesAnHourlyRowWithoutItsPrefix(t *testing.T) {
 	r := rows[0]
 	if r.Hour != hour || r.NodeID != 3 || r.ClientASN != 44244 || r.Country != "IR" || r.Region != "Isfahan" ||
 		r.Accepted != 15 || r.Authed != 10 || r.FailedAuth != 2 || r.FailedTimeout != 1 || r.EarlyClose != 1 ||
-		r.RTTSum != 150*7+250*3 || r.RTTN != 10 || r.Up != 1000 || r.Down != 9000 {
+		r.RTTSum != 150*7+250*3 || r.RTTN != 10 || r.Up != 1000 || r.Down != 9000 ||
+		r.Replayed != 2 || r.FollowUpFail != 1 || r.FailedQUIC != 4 || r.FailedOther != 0 {
 		t.Fatalf("row = %+v", r)
 	}
 	assertNoPrefix(t, gdb)
@@ -156,7 +158,7 @@ func TestASampleBecomesAnHourlyRowWithoutItsPrefix(t *testing.T) {
 	}
 	var again model.PathHour
 	gdb.First(&again, r.ID)
-	if again.Accepted != 16 {
+	if again.Accepted != 16 || again.Replayed != 2 {
 		t.Fatalf("the next flush did not add into the cell: %d", again.Accepted)
 	}
 }

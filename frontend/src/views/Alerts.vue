@@ -31,7 +31,11 @@ const nodeName = (id: number) =>
   nodes.value.find((n) => n.nodeId === id)?.name || t('matrix.node', { id })
 
 const severity = (k: Alert['kind']) =>
-  k === 'path.degraded' ? 'danger' : k === 'asn.outage' ? 'warn' : 'success'
+  k === 'path.degraded'
+    ? 'danger'
+    : k === 'asn.outage' || k === 'endpoint.probed'
+      ? 'warn'
+      : 'success'
 
 function reason(a: Alert) {
   let d: Record<string, number> = {}
@@ -58,6 +62,8 @@ function reason(a: Alert) {
       })
   }
   if (a.kind === 'asn.outage') return t('alerts.outageWhy', { n: num(d.nodes ?? 0) })
+  if (a.kind === 'endpoint.probed')
+    return t('alerts.probedWhy', { score: num(d.score ?? 0), n: num(d.replayed ?? 0) })
   return ''
 }
 </script>
@@ -74,7 +80,10 @@ function reason(a: Alert) {
           <Tag :severity="severity(a.kind)" :value="t('alerts.kind.' + a.kind)" />
           <span class="muted">{{ when(a.at) }}</span>
         </div>
-        <div>
+        <div v-if="a.kind.startsWith('endpoint.')">
+          <b>{{ nodeName(a.nodeId) }}</b> <span class="mono ltr">{{ a.inbound }}</span>
+        </div>
+        <div v-else>
           <b>{{ asnLabel(a.asn, a.org) }}</b>
           <template v-if="a.kind.startsWith('path.')">
             <span class="dir-arrow">→</span> {{ nodeName(a.nodeId) }}

@@ -183,6 +183,10 @@ const feedSeverity = computed(() => {
       <Message v-for="asn in status.outages" :key="asn" severity="error" :closable="false">
         {{ t('overview.outage', { asn: 'AS' + asn }) }}
       </Message>
+      <Message v-if="status.probed" severity="warn" :closable="false">
+        {{ t('overview.probed', { n: num(status.probed) }) }}
+        <RouterLink :to="{ name: 'probing' }">{{ t('overview.seeProbing') }}</RouterLink>
+      </Message>
     </template>
 
     <section v-if="suggestions.length" class="card stack">

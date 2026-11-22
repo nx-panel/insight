@@ -1,6 +1,7 @@
 package detect_test
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -12,11 +13,22 @@ import (
 	"gorm.io/gorm"
 )
 
+// openDB is a fresh SQLite database, or the PostgreSQL one
+// NX_INSIGHT_PG_DSN names, emptied, so the detector's SQL is run on both.
 func openDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	gdb, err := db.Open(config.Config{Driver: config.DriverSQLite, DSN: filepath.Join(t.TempDir(), "insight.db")})
+	cfg := config.Config{Driver: config.DriverSQLite, DSN: filepath.Join(t.TempDir(), "insight.db")}
+	if dsn := os.Getenv("NX_INSIGHT_PG_DSN"); dsn != "" {
+		cfg = config.Config{Driver: config.DriverPostgres, DSN: dsn}
+	}
+	gdb, err := db.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if cfg.Driver == config.DriverPostgres {
+		for _, m := range append(model.All(), detect.Tables()...) {
+			gdb.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(m)
+		}
 	}
 	return gdb
 }

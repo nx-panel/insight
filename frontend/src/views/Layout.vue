@@ -18,6 +18,7 @@ const open = ref(false)
 const nav = computed(() => [
   { to: { name: 'overview' }, icon: 'pi pi-th-large', label: t('nav.overview') },
   { to: { name: 'nodes' }, icon: 'pi pi-server', label: t('nav.nodes') },
+  { to: { name: 'probing' }, icon: 'pi pi-eye', label: t('nav.probing') },
   { to: { name: 'alerts' }, icon: 'pi pi-bell', label: t('nav.alerts') },
   { to: { name: 'security' }, icon: 'pi pi-shield', label: t('nav.security') },
 ])
