@@ -1,0 +1,512 @@
+// Package ingest pulls the panel's path telemetry (GET
+// /api/v1/telemetry/paths), turns each sample's client prefix into its ASN
+// and region and forgets the prefix, and adds the counters into hourly cells
+// in Insight's database (nx-panel docs/path-telemetry.md §4.4, §4.6).
+//
+// Polled samples accumulate in memory and are written every FlushEvery, one
+// transaction a flush, with the poll cursor in the same transaction: a
+// restart loses nothing the panel still holds (about fifteen minutes), and a
+// longer outage is reported as a gap.
+package ingest
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"net/http"
+	"net/netip"
+	"sort"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/nx-panel/addon-kit/panel"
+	"github.com/nx-panel/insight/internal/model"
+	"github.com/nx-panel/insight/internal/netinfo"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
+const (
+	// PollEvery is how often the panel is asked; its buffer keeps about
+	// fifteen minutes, so a minute leaves room for a slow restart.
+	PollEvery = time.Minute
+	// FlushEvery is how often the accumulated cells are written.
+	FlushEvery = 5 * time.Minute
+	// TopK is how many client ASNs get their own cell per node and inbound
+	// in an hour; the rest fold into ASN 0 (§4.6).
+	TopK = 30
+	// pageLimit is the samples asked for per request.
+	pageLimit = 20000
+	// OtherASN is the folded cell's ASN.
+	OtherASN = 0
+)
+
+// Poll states, for the admin web.
+const (
+	StateWaiting     = "waiting"     // not registered with a panel yet
+	StateOK          = "ok"          // polling
+	StateUnsupported = "unsupported" // the panel predates path telemetry
+	StateNoScope     = "no-scope"    // the token lacks telemetry:read
+	StateError       = "error"       // the last poll failed otherwise
+)
+
+const stateCursor = "poll_cursor"
+
+// Getter is the panel client's one call this package makes.
+type Getter interface {
+	Get(ctx context.Context, path string, out any) error
+}
+
+// Sample is one panel sample as polled.
+type Sample struct {
+	Cursor     uint64            `json:"cursor"`
+	NodeID     uint              `json:"node_id"`
+	DateTime   int64             `json:"date_time"`
+	Inbound    string            `json:"inbound"`
+	Network    string            `json:"network"`
+	Prefix     string            `json:"prefix"`
+	SourceKind string            `json:"source_kind"`
+	Accepted   uint32            `json:"accepted"`
+	Failed     map[string]uint32 `json:"failed"`
+	Authed     uint32            `json:"authed"`
+	EarlyClose uint32            `json:"early_close"`
+	DurP50     uint32            `json:"dur_p50"`
+	RTTP50     uint32            `json:"rtt_p50"`
+	RetransPPM uint32            `json:"retrans_ppm"`
+	Up         int64             `json:"up"`
+	Down       int64             `json:"down"`
+}
+
+// NodeState is one node's telemetry state as the panel reports it.
+type NodeState struct {
+	ID    uint   `json:"id"`
+	Name  string `json:"name"`
+	State string `json:"state"`
+}
+
+type page struct {
+	Active  bool        `json:"active"`
+	Cursor  uint64      `json:"cursor"`
+	Gap     bool        `json:"gap"`
+	Samples []Sample    `json:"samples"`
+	Nodes   []NodeState `json:"nodes"`
+}
+
+// Status is what the admin web shows about the feed.
+type Status struct {
+	State    string      `json:"state"`
+	Error    string      `json:"error,omitempty"`
+	LastPoll time.Time   `json:"lastPoll"`
+	Gaps     int         `json:"gaps"`
+	LastGap  time.Time   `json:"lastGap"`
+	Nodes    []NodeState `json:"nodes"`
+	Pending  int         `json:"pending"`
+}
+
+type cellKey struct {
+	hour int64
+	model.PathCell
+}
+
+type groupKey struct {
+	hour    int64
+	node    uint
+	inbound string
+}
+
+// Ingest is the poll, the accumulation and the flush.
+type Ingest struct {
+	DB  *gorm.DB
+	Net *netinfo.DB
+	// Panel is the client to poll, nil while unregistered.
+	Panel func() Getter
+	// Now is the clock; nil is time.Now.
+	Now func() time.Time
+
+	mu      sync.Mutex
+	pending map[cellKey]*model.PathCounters
+	// known is, per hour and node and inbound, the ASNs that have their own
+	// cell already — in the database or pending — so top-K folding holds
+	// across flushes.
+	known  map[groupKey]map[uint32]bool
+	cursor uint64
+	loaded bool
+	status Status
+}
+
+func (in *Ingest) now() time.Time {
+	if in.Now != nil {
+		return in.Now()
+	}
+	return time.Now()
+}
+
+// Status is a copy of the feed's status.
+func (in *Ingest) Status() Status {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	s := in.status
+	if s.State == "" {
+		s.State = StateWaiting
+	}
+	s.Nodes = append([]NodeState(nil), s.Nodes...)
+	s.Pending = len(in.pending)
+	return s
+}
+
+// Run polls and flushes for the life of ctx, and flushes once more on the
+// way out.
+func (in *Ingest) Run(ctx context.Context) {
+	poll := time.NewTicker(PollEvery)
+	flush := time.NewTicker(FlushEvery)
+	defer poll.Stop()
+	defer flush.Stop()
+	in.pollLogged(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			if err := in.Flush(context.Background()); err != nil {
+				log.Printf("ingest: flush on the way out: %v", err)
+			}
+			return
+		case <-poll.C:
+			in.pollLogged(ctx)
+		case <-flush.C:
+			if err := in.Flush(ctx); err != nil {
+				log.Printf("ingest: flush: %v", err)
+			}
+		}
+	}
+}
+
+func (in *Ingest) pollLogged(ctx context.Context) {
+	if err := in.Poll(ctx); err != nil {
+		log.Printf("ingest: poll: %v", err)
+	}
+}
+
+// Poll asks the panel for everything after the cursor, a page at a time.
+func (in *Ingest) Poll(ctx context.Context) error {
+	if in.Panel == nil {
+		return nil
+	}
+	client := in.Panel()
+	if client == nil {
+		return nil
+	}
+	if err := in.loadCursor(); err != nil {
+		return err
+	}
+	for range 50 { // a backlog of a million samples at most per poll
+		in.mu.Lock()
+		since := in.cursor
+		in.mu.Unlock()
+		var p page
+		err := client.Get(ctx, "/telemetry/paths?since="+strconv.FormatUint(since, 10)+"&limit="+strconv.Itoa(pageLimit), &p)
+		if err != nil {
+			in.setError(err)
+			return err
+		}
+		in.take(p)
+		if len(p.Samples) < pageLimit {
+			return nil
+		}
+	}
+	return nil
+}
+
+func (in *Ingest) setError(err error) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	in.status.LastPoll = in.now()
+	in.status.Error = err.Error()
+	switch {
+	case panel.IsStatus(err, http.StatusNotFound):
+		in.status.State = StateUnsupported
+	case panel.IsStatus(err, http.StatusForbidden):
+		in.status.State = StateNoScope
+	default:
+		in.status.State = StateError
+	}
+}
+
+// take adds one page into the pending cells. A sample's prefix is read
+// here, looked up and dropped: it is never stored and never leaves this
+// function.
+func (in *Ingest) take(p page) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	now := in.now()
+	in.status.State, in.status.Error, in.status.LastPoll = StateOK, "", now
+	in.status.Nodes = p.Nodes
+	if p.Gap {
+		in.status.Gaps++
+		in.status.LastGap = now
+	}
+	if in.pending == nil {
+		in.pending = map[cellKey]*model.PathCounters{}
+	}
+	for _, s := range p.Samples {
+		var info netinfo.Info
+		if pfx, err := netip.ParsePrefix(s.Prefix); err == nil && in.Net != nil {
+			info = in.Net.Lookup(pfx.Addr())
+		}
+		k := cellKey{hour: s.DateTime - s.DateTime%3600, PathCell: model.PathCell{
+			NodeID: s.NodeID, Inbound: s.Inbound, ClientASN: info.ASN, Country: info.Country,
+			Region: info.Region, Network: s.Network, SourceKind: s.SourceKind,
+		}}
+		c := in.pending[k]
+		if c == nil {
+			c = &model.PathCounters{}
+			in.pending[k] = c
+		}
+		add(c, s)
+	}
+	in.cursor = max(in.cursor, p.Cursor)
+}
+
+func add(c *model.PathCounters, s Sample) {
+	c.Accepted += uint64(s.Accepted)
+	c.Authed += uint64(s.Authed)
+	c.EarlyClose += uint64(s.EarlyClose)
+	for class, n := range s.Failed {
+		switch class {
+		case "tls":
+			c.FailedTLS += uint64(n)
+		case "auth":
+			c.FailedAuth += uint64(n)
+		case "timeout":
+			c.FailedTimeout += uint64(n)
+		case "reset":
+			c.FailedReset += uint64(n)
+		case "eof":
+			c.FailedEOF += uint64(n)
+		case "ingress_noroute":
+			c.FailedNoRoute += uint64(n)
+		default:
+			c.FailedOther += uint64(n)
+		}
+	}
+	w := uint64(max(s.Authed, 1))
+	if s.DurP50 > 0 {
+		c.DurSum += uint64(s.DurP50) * w
+		c.DurN += w
+	}
+	if s.RTTP50 > 0 {
+		c.RTTSum += uint64(s.RTTP50) * w
+		c.RTTN += w
+	}
+	if s.RetransPPM > 0 || s.RTTP50 > 0 {
+		c.RetransSum += uint64(s.RetransPPM) * w
+		c.RetransN += w
+	}
+	c.Up += s.Up
+	c.Down += s.Down
+}
+
+func (in *Ingest) loadCursor() error {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if in.loaded {
+		return nil
+	}
+	var st model.State
+	err := in.DB.Where("key = ?", stateCursor).First(&st).Error
+	switch {
+	case err == nil:
+		n, perr := strconv.ParseUint(st.Value, 10, 64)
+		if perr != nil {
+			return fmt.Errorf("the stored cursor %q: %w", st.Value, perr)
+		}
+		in.cursor = n
+	case errors.Is(err, gorm.ErrRecordNotFound):
+	default:
+		return err
+	}
+	in.loaded = true
+	return nil
+}
+
+// Flush writes the pending cells and the cursor in one transaction.
+func (in *Ingest) Flush(ctx context.Context) error {
+	in.mu.Lock()
+	pending, cursor := in.pending, in.cursor
+	in.pending = nil
+	in.mu.Unlock()
+	if len(pending) == 0 && !in.loadedCursor() {
+		return nil
+	}
+	err := in.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		folded, err := in.fold(tx, pending)
+		if err != nil {
+			return err
+		}
+		for k, c := range folded {
+			row := model.PathHour{Hour: k.hour, PathCell: k.PathCell, PathCounters: *c}
+			if err := UpsertAdd(tx, &row, "hour"); err != nil {
+				return err
+			}
+		}
+		return tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "key"}},
+			DoUpdates: clause.AssignmentColumns([]string{"value"}),
+		}).Create(&model.State{Key: stateCursor, Value: strconv.FormatUint(cursor, 10)}).Error
+	})
+	if err != nil {
+		// Put the cells back: the next flush tries them again, merged with
+		// what came meanwhile.
+		in.mu.Lock()
+		// What fold admitted was not written: read it again next time.
+		in.known = nil
+		if in.pending == nil {
+			in.pending = map[cellKey]*model.PathCounters{}
+		}
+		for k, c := range pending {
+			if have := in.pending[k]; have != nil {
+				addCounters(have, c)
+			} else {
+				in.pending[k] = c
+			}
+		}
+		in.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+func (in *Ingest) loadedCursor() bool {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	return in.loaded
+}
+
+// fold applies top-K: per hour, node and inbound, an ASN gets a cell of its
+// own while fewer than TopK have one; past that its counters go to the
+// OtherASN cell, which carries no country or region so it stays one cell.
+// New ASNs are admitted busiest first.
+func (in *Ingest) fold(tx *gorm.DB, pending map[cellKey]*model.PathCounters) (map[cellKey]*model.PathCounters, error) {
+	in.mu.Lock()
+	if in.known == nil {
+		in.known = map[groupKey]map[uint32]bool{}
+	}
+	in.mu.Unlock()
+	keys := make([]cellKey, 0, len(pending))
+	for k := range pending {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return weight(pending[keys[i]]) > weight(pending[keys[j]]) })
+	out := make(map[cellKey]*model.PathCounters, len(pending))
+	for _, k := range keys {
+		known, err := in.knownFor(tx, groupKey{k.hour, k.NodeID, k.Inbound})
+		if err != nil {
+			return nil, err
+		}
+		dest := k
+		if k.ClientASN != OtherASN && !known[k.ClientASN] {
+			if countReal(known) < TopK {
+				known[k.ClientASN] = true
+			} else {
+				dest.ClientASN, dest.Country, dest.Region = OtherASN, "", ""
+			}
+		}
+		if have := out[dest]; have != nil {
+			addCounters(have, pending[k])
+		} else {
+			c := *pending[k]
+			out[dest] = &c
+		}
+	}
+	return out, nil
+}
+
+func countReal(known map[uint32]bool) int {
+	n := 0
+	for asn := range known {
+		if asn != OtherASN {
+			n++
+		}
+	}
+	return n
+}
+
+func weight(c *model.PathCounters) uint64 { return c.Accepted + c.Authed + c.FailedAuth + c.FailedTLS }
+
+// knownFor loads, once per group, the ASNs the database already holds a
+// cell for.
+func (in *Ingest) knownFor(tx *gorm.DB, g groupKey) (map[uint32]bool, error) {
+	in.mu.Lock()
+	known := in.known[g]
+	in.mu.Unlock()
+	if known != nil {
+		return known, nil
+	}
+	var asns []uint32
+	if err := tx.Model(&model.PathHour{}).Where("hour = ? AND node_id = ? AND inbound = ?", g.hour, g.node, g.inbound).
+		Distinct().Pluck("client_asn", &asns).Error; err != nil {
+		return nil, err
+	}
+	known = map[uint32]bool{}
+	for _, a := range asns {
+		known[a] = true
+	}
+	in.mu.Lock()
+	in.known[g] = known
+	// Forget the groups of hours long gone, so the map stays small.
+	cut := g.hour - 3*3600
+	for k := range in.known {
+		if k.hour < cut {
+			delete(in.known, k)
+		}
+	}
+	in.mu.Unlock()
+	return known, nil
+}
+
+func addCounters(a, b *model.PathCounters) {
+	a.Accepted += b.Accepted
+	a.Authed += b.Authed
+	a.EarlyClose += b.EarlyClose
+	a.FailedTLS += b.FailedTLS
+	a.FailedAuth += b.FailedAuth
+	a.FailedTimeout += b.FailedTimeout
+	a.FailedReset += b.FailedReset
+	a.FailedEOF += b.FailedEOF
+	a.FailedOther += b.FailedOther
+	a.FailedNoRoute += b.FailedNoRoute
+	a.DurSum += b.DurSum
+	a.DurN += b.DurN
+	a.RTTSum += b.RTTSum
+	a.RTTN += b.RTTN
+	a.RetransSum += b.RetransSum
+	a.RetransN += b.RetransN
+	a.Up += b.Up
+	a.Down += b.Down
+}
+
+// counterColumns are the additive columns, for the upsert.
+var counterColumns = []string{
+	"accepted", "authed", "early_close",
+	"failed_tls", "failed_auth", "failed_timeout", "failed_reset", "failed_eof", "failed_other", "failed_no_route",
+	"dur_sum", "dur_n", "rtt_sum", "rtt_n", "retrans_sum", "retrans_n", "up", "down",
+}
+
+// UpsertAdd inserts row, or adds its counters into the row already holding
+// its cell. timeColumn is "hour" or "day". Written as SQL both SQLite and
+// PostgreSQL take: ON CONFLICT … DO UPDATE SET c = t.c + excluded.c.
+func UpsertAdd(tx *gorm.DB, row any, timeColumn string) error {
+	table := "path_hours"
+	if timeColumn == "day" {
+		table = "path_days"
+	}
+	set := map[string]any{}
+	for _, c := range counterColumns {
+		set[c] = gorm.Expr(table + "." + c + " + excluded." + c)
+	}
+	cols := []clause.Column{{Name: timeColumn}}
+	for _, c := range []string{"node_id", "inbound", "client_asn", "country", "region", "network", "source_kind"} {
+		cols = append(cols, clause.Column{Name: c})
+	}
+	return tx.Clauses(clause.OnConflict{Columns: cols, DoUpdates: clause.Assignments(set)}).Create(row).Error
+}

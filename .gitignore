@@ -1,0 +1,8 @@
+/data/
+/insight
+/signed.json
+*.key
+.env
+node_modules/
+/frontend/dist/*
+!/frontend/dist/.gitkeep

@@ -1,0 +1,67 @@
+{
+  "api": 1,
+  "slug": "insight",
+  "name": "NX Insight",
+  "version": "0.1.0",
+  "publisher": "NX",
+  "license": "AGPL-3.0",
+  "description": {
+    "en": "Shows which of your nodes and protocols still reach which of your users' ISPs, warns when a path is blocked, and puts the links that work first in each user's subscription. Client addresses never leave your server.",
+    "fa": "نشان می‌دهد کدام نودها و پروتکل‌هایتان هنوز به کدام اپراتورِ کاربرانتان می‌رسند، وقتی مسیری بسته شود هشدار می‌دهد، و لینک‌های کارا را در اشتراک هر کاربر جلو می‌آورد. آدرس کلاینت‌ها هیچ‌وقت از سرور شما بیرون نمی‌رود.",
+    "ru": "Показывает, какие узлы и протоколы ещё доходят до провайдеров ваших пользователей, предупреждает о блокировке пути и ставит рабочие ссылки первыми в подписке. Адреса клиентов не покидают ваш сервер.",
+    "zh": "显示您的哪些节点和协议仍能到达用户所在的运营商，在路径被封锁时发出警告，并把可用的链接排在每个用户订阅的前面。客户端地址绝不会离开您的服务器。"
+  },
+  "docs": "https://github.com/nx-panel/insight",
+  "install": {
+    "docker": {
+      "image": "ghcr.io/nx-panel/insight",
+      "compose": "deploy/compose.yml"
+    },
+    "binary": {
+      "linux-amd64": "insight-linux-amd64.tar.gz",
+      "linux-arm64": "insight-linux-arm64.tar.gz"
+    },
+    "options": [
+      {
+        "key": "port",
+        "type": "port",
+        "default": 8099,
+        "label": { "en": "Port", "fa": "پورت", "ru": "Порт", "zh": "端口" }
+      },
+      {
+        "key": "database",
+        "type": "choice",
+        "choices": ["sqlite", "postgres"],
+        "default": "sqlite",
+        "label": { "en": "Database", "fa": "دیتابیس", "ru": "База данных", "zh": "数据库" }
+      },
+      {
+        "key": "database_dsn",
+        "type": "string",
+        "label": { "en": "PostgreSQL connection string", "fa": "رشتهٔ اتصال PostgreSQL", "ru": "Строка подключения PostgreSQL", "zh": "PostgreSQL 连接字符串" }
+      },
+      {
+        "key": "region_countries",
+        "type": "string",
+        "default": "IR,RU,CN",
+        "label": { "en": "Countries to tell regions apart in", "fa": "کشورهایی که استان‌هایشان جدا دیده شود", "ru": "Страны с разбивкой по регионам", "zh": "区分地区的国家" },
+        "help": {
+          "en": "Two-letter codes. Clients elsewhere get their network and country, no region.",
+          "fa": "کدهای دوحرفی. کلاینت‌های جاهای دیگر شبکه و کشورشان را دارند، بدون استان.",
+          "ru": "Двухбуквенные коды. Для остальных клиентов — сеть и страна, без региона.",
+          "zh": "两字母代码。其他地方的客户端只记录网络和国家，不记录地区。"
+        }
+      }
+    ]
+  },
+  "scopes": [
+    { "scope": "telemetry:read", "purpose": "to read how your users' connections fare per node, inbound and client network; this turns the counting on while Insight runs" },
+    { "scope": "telemetry:write", "purpose": "to put the links that work for each client network first in its subscriptions" },
+    { "scope": "nodes:read", "purpose": "to learn each node's address, so its host network and city can be shown" }
+  ],
+  "events": ["panel.addon_removed"],
+  "webhook": "/nx/events",
+  "setup": "/nx/setup",
+  "health": "/health",
+  "requires": { "panel": ">=0.1.3" }
+}
