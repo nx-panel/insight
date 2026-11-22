@@ -21,9 +21,9 @@ import (
 	"strings"
 
 	"github.com/nx-panel/addon-kit/telegram"
-	"github.com/nx-panel/insight/internal/model"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
+
+	"github.com/nx-panel/insight/internal/model"
 )
 
 // Settings are the admin's model, set in the admin web and kept in
@@ -68,14 +68,77 @@ func Load(ctx context.Context, gdb *gorm.DB) (Settings, error) {
 	return s, nil
 }
 
+// SameProvider reports whether a saved key may be kept for s: the same API
+// scheme, host and port over the same proxy. Anywhere else the key has to be
+// typed again — otherwise whoever holds an admin session could point the
+// address at a server of their own and have the saved key sent there. The
+// two are compared as parsed, so a spelling a URL library writes differently
+// (an upper-case scheme, a password's escaping) is not a change.
+func (s Settings) SameProvider(old Settings) bool {
+	a, errA := url.Parse(strings.TrimSpace(s.URL))
+	b, errB := url.Parse(strings.TrimSpace(old.URL))
+	return errA == nil && errB == nil && a.Scheme == b.Scheme && strings.EqualFold(a.Host, b.Host) &&
+		sameProxy(s.Proxy, old.Proxy)
+}
+
+func sameProxy(a, b string) bool {
+	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
+	if a == b {
+		return true
+	}
+	ua, errA := url.Parse(a)
+	ub, errB := url.Parse(b)
+	if errA != nil || errB != nil || a == "" || b == "" {
+		return false
+	}
+	pa, _ := ua.User.Password()
+	pb, _ := ub.User.Password()
+	return ua.Scheme == ub.Scheme && strings.EqualFold(ua.Host, ub.Host) && ua.User.Username() == ub.User.Username() && pa == pb
+}
+
+// maskedPassword stands in for a proxy's password in what the web is shown.
+const maskedPassword = "********"
+
+// MaskProxy is a proxy URL without its password.
+func MaskProxy(proxy string) string {
+	u, err := url.Parse(proxy)
+	if err != nil || u.User == nil {
+		return proxy
+	}
+	if _, has := u.User.Password(); !has {
+		return proxy
+	}
+	u.User = url.UserPassword(u.User.Username(), maskedPassword)
+	// String escapes the asterisks; the admin is shown the mask itself.
+	return strings.Replace(u.String(), url.UserPassword("", maskedPassword).String(), ":"+maskedPassword, 1)
+}
+
+// UnmaskProxy is the saved proxy when the web sent it back with the mask
+// still in it — the same scheme, host and user — and what the web sent
+// otherwise: a proxy that differs in any of them gets no password it was
+// not given.
+func UnmaskProxy(proxy, saved string) string {
+	u, err := url.Parse(strings.TrimSpace(proxy))
+	if err != nil || u.User == nil {
+		return proxy
+	}
+	if p, _ := u.User.Password(); p != maskedPassword {
+		return proxy
+	}
+	old, err := url.Parse(strings.TrimSpace(saved))
+	if err != nil || old.User == nil || old.Scheme != u.Scheme || !strings.EqualFold(old.Host, u.Host) || old.User.Username() != u.User.Username() {
+		return proxy
+	}
+	return saved
+}
+
 // Save writes the settings after Validate.
 func Save(ctx context.Context, gdb *gorm.DB, s Settings) error {
 	if err := s.Validate(); err != nil {
 		return err
 	}
 	raw, _ := json.Marshal(s)
-	return gdb.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "key"}}, DoUpdates: clause.AssignmentColumns([]string{"value"})}).
-		Create(&model.State{Key: stateSettings, Value: string(raw)}).Error
+	return model.PutState(gdb.WithContext(ctx), stateSettings, string(raw))
 }
 
 // The settings the admin has to correct, one error each so the admin web
@@ -100,7 +163,10 @@ func (s *Settings) Validate() error {
 	}
 	if s.URL != "" {
 		u, err := url.Parse(s.URL)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		// No query or fragment: "/chat/completions" is appended to it, and
+		// a "?" would turn that into a parameter of some other path. No
+		// credentials in it either: the key has its own field.
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || strings.ContainsAny(s.URL, "?#") || u.User != nil {
 			return ErrURL
 		}
 	}

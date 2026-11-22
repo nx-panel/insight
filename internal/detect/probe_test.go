@@ -5,9 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/nx-panel/insight/internal/detect"
 	"github.com/nx-panel/insight/internal/model"
-	"gorm.io/gorm"
 )
 
 func hourRow(t *testing.T, gdb *gorm.DB, hour int64, node uint, inbound string, asn uint32, c model.PathCounters) {

@@ -5,9 +5,10 @@ import (
 	"sort"
 	"time"
 
-	"github.com/nx-panel/insight/internal/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+
+	"github.com/nx-panel/insight/internal/model"
 )
 
 // Active probing (nx-panel docs/path-telemetry.md §4.5, PT9). The node
@@ -37,6 +38,8 @@ const (
 	followPoints = 20
 	followMin    = 10
 	followSurge  = 3
+	// followNormalHours is how much history the follow-up normal needs.
+	followNormalHours = 24
 	// ProbedAt is the score that raises endpoint.probed; the endpoint is
 	// quiet again below QuietBelow (hysteresis), and may alert again after.
 	ProbedAt   = 40
@@ -86,6 +89,7 @@ type evidenceRow struct {
 	Failed       uint64
 	Accepted     uint64
 	LastEvidence int64
+	FirstHour    int64
 }
 
 func (d *Detector) evidence(tx *gorm.DB, from, to int64) (map[Endpoint]evidenceRow, error) {
@@ -94,7 +98,7 @@ func (d *Detector) evidence(tx *gorm.DB, from, to int64) (map[Endpoint]evidenceR
 		Select("node_id, inbound, SUM(replayed) AS replayed, SUM(follow_up_fail) AS follow_up_fail, "+
 			"SUM(failed_no_route) AS no_route, SUM(failed_quic) AS quic_stray, "+
 			"SUM(failed_tls + failed_auth + failed_timeout + failed_reset + failed_eof + failed_other) AS failed, "+
-			"SUM(accepted) AS accepted, MAX(CASE WHEN replayed > 0 THEN hour ELSE 0 END) AS last_evidence").
+			"SUM(accepted) AS accepted, MAX(CASE WHEN replayed > 0 THEN hour ELSE 0 END) AS last_evidence, MIN(hour) AS first_hour").
 		Where("hour >= ? AND hour < ?", from, to).Group("node_id, inbound").Scan(&rows).Error
 	out := make(map[Endpoint]evidenceRow, len(rows))
 	for _, r := range rows {
@@ -124,9 +128,11 @@ func Score(replayed, followUp uint64, followNormal float64) int {
 func (d *Detector) EvaluateProbes(ctx context.Context) error {
 	now := d.now()
 	// The current hour counts from its start, so the window is ScoreWindow
-	// of full hours plus the one under way.
+	// of full hours plus the one under way; the normal is scaled to the
+	// same length below.
 	to := now.Truncate(time.Hour).Add(time.Hour).Unix()
 	from := to - int64(ScoreWindow/time.Second) - 3600
+	windowHours := float64(now.Unix()-from) / 3600
 	weekFrom := from - 7*24*3600
 	tx := d.DB.WithContext(ctx)
 	win, err := d.evidence(tx, from, to)
@@ -160,15 +166,28 @@ func (d *Detector) EvaluateProbes(ctx context.Context) error {
 		}
 		return keys[i].Inbound < keys[j].Inbound
 	})
-	windows := float64(7*24*time.Hour) / float64(ScoreWindow)
 	var alerts []Alert
 	var rows []Suspicion
+	var gone []Endpoint
 	for _, e := range keys {
 		w, p := win[e], prev[e]
-		normal := float64(week[e].FollowUpFail) / windows
+		// The endpoint's own follow-up failures per window, from as much of
+		// the week before as it has hours for. With less than a day of
+		// them there is no normal to speak of, and a surge cannot be told
+		// from an ordinary evening: it is not scored.
+		normal, hasNormal := 0.0, false
+		if wk, ok := week[e]; ok && wk.FirstHour > 0 {
+			if hours := float64(from-wk.FirstHour) / 3600; hours >= followNormalHours {
+				normal, hasNormal = float64(wk.FollowUpFail)/hours*windowHours, true
+			}
+		}
+		followUp := w.FollowUpFail
+		if !hasNormal {
+			followUp = 0
+		}
 		s := Suspicion{
 			NodeID: e.Node, Inbound: e.Inbound,
-			Score:    Score(w.Replayed, w.FollowUpFail, normal),
+			Score:    Score(w.Replayed, followUp, normal),
 			Replayed: w.Replayed, FollowUpFail: w.FollowUpFail, FollowNormal: normal,
 			NoRoute: w.NoRoute, QUICStray: w.QUICStray, Failed: w.Failed, Accepted: w.Accepted,
 			Probed: p.Probed, ProbedAtUnix: p.ProbedAtUnix, LastEvidence: max(p.LastEvidence, w.LastEvidence),
@@ -190,24 +209,37 @@ func (d *Detector) EvaluateProbes(ctx context.Context) error {
 		quiet := s.Replayed == 0 && s.FollowUpFail == 0 && s.NoRoute == 0 && s.QUICStray == 0
 		if quiet && !s.Probed && s.ProbedAtUnix == 0 && s.LastEvidence == 0 {
 			if _, ok := prev[e]; ok {
-				if err := tx.Delete(&Suspicion{}, "node_id = ? AND inbound = ?", e.Node, e.Inbound).Error; err != nil {
-					return err
-				}
+				gone = append(gone, e)
 			}
 			continue // nothing to remember
 		}
 		rows = append(rows, s)
 	}
-	if len(rows) > 0 {
-		if err := tx.Clauses(clause.OnConflict{UpdateAll: true}).CreateInBatches(rows, 200).Error; err != nil {
-			return err
+	// The episodes and their alerts are written together: an episode marked
+	// begun whose alert was not stored would never be said.
+	err = tx.Transaction(func(tx *gorm.DB) error {
+		for _, e := range gone {
+			if err := tx.Delete(&Suspicion{}, "node_id = ? AND inbound = ?", e.Node, e.Inbound).Error; err != nil {
+				return err
+			}
 		}
+		if len(rows) > 0 {
+			if err := tx.Clauses(clause.OnConflict{UpdateAll: true}).CreateInBatches(rows, 200).Error; err != nil {
+				return err
+			}
+		}
+		for i := range alerts {
+			if err := tx.Create(&alerts[i]).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
-	for i := range alerts {
-		if err := tx.Create(&alerts[i]).Error; err != nil {
-			return err
-		}
-		if d.Send != nil {
+	if d.Send != nil {
+		for i := range alerts {
 			d.Send(ctx, alerts[i])
 		}
 	}
@@ -216,19 +248,39 @@ func (d *Detector) EvaluateProbes(ctx context.Context) error {
 
 // Followed reports, for each probed alert in alerts, whether a path alert
 // on the same endpoint came within CalibrateWithin after it: the score's
-// calibration, read back.
+// calibration, read back. One query for all of them.
 func Followed(tx *gorm.DB, probed []Alert) (map[uint]bool, error) {
 	out := map[uint]bool{}
+	var first, last int64
 	for _, a := range probed {
 		if a.Kind != KindProbed {
 			continue
 		}
-		var n int64
-		if err := tx.Model(&Alert{}).Where("kind = ? AND node_id = ? AND inbound = ? AND at >= ? AND at <= ?",
-			KindDegraded, a.NodeID, a.Inbound, a.At, a.At+int64(CalibrateWithin/time.Second)).Count(&n).Error; err != nil {
-			return nil, err
+		out[a.ID] = false
+		if first == 0 || a.At < first {
+			first = a.At
 		}
-		out[a.ID] = n > 0
+		last = max(last, a.At)
+	}
+	if len(out) == 0 {
+		return out, nil
+	}
+	within := int64(CalibrateWithin / time.Second)
+	var degraded []Alert
+	if err := tx.Model(&Alert{}).Select("node_id", "inbound", "at").
+		Where("kind = ? AND at >= ? AND at <= ?", KindDegraded, first, last+within).Find(&degraded).Error; err != nil {
+		return nil, err
+	}
+	for _, a := range probed {
+		if a.Kind != KindProbed {
+			continue
+		}
+		for _, d := range degraded {
+			if d.NodeID == a.NodeID && d.Inbound == a.Inbound && d.At >= a.At && d.At <= a.At+within {
+				out[a.ID] = true
+				break
+			}
+		}
 	}
 	return out, nil
 }

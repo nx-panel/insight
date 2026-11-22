@@ -8,8 +8,9 @@ import (
 	"time"
 
 	"github.com/nx-panel/addon-kit/auth"
-	"github.com/nx-panel/insight/internal/model"
 	"gorm.io/gorm"
+
+	"github.com/nx-panel/insight/internal/model"
 )
 
 // SessionTTL is how long a sign-in lasts.
@@ -98,4 +99,10 @@ func End(gdb *gorm.DB, token string) error {
 // EndOthers ends every session of an admin but the one with keep's token.
 func EndOthers(gdb *gorm.DB, adminID uint, keep string) error {
 	return gdb.Where("admin_id = ? AND token_hash <> ?", adminID, auth.HashToken(keep)).Delete(&model.Session{}).Error
+}
+
+// SweepSessions deletes every session past its expiry: Of removes one only
+// when its own token is shown again, which an abandoned one never is.
+func SweepSessions(gdb *gorm.DB, now time.Time) error {
+	return gdb.Where("expires_at <= ?", now.Unix()).Delete(&model.Session{}).Error
 }

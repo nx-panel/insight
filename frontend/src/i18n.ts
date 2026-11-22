@@ -17,7 +17,6 @@ const en = {
     menu: 'Menu',
   },
   login: {
-    title: 'Sign in',
     username: 'Username',
     password: 'Password',
     submit: 'Sign in',
@@ -136,7 +135,8 @@ const en = {
     key: 'API key',
     keySaved: 'saved; type to replace',
     keyNone: 'none (a local model needs none)',
-    keyHint: 'Kept in Insight’s database and never shown again.',
+    keyHint:
+      'Kept in Insight’s database and never shown again. Changing the API address’s scheme, host or port, or the proxy, clears it.',
     clearKey: 'Remove the key',
     proxy: 'Proxy (optional)',
     budget: 'Daily token budget',
@@ -219,14 +219,9 @@ const en = {
     showPassword: 'Show',
     hidePassword: 'Hide',
     error: 'Error',
-    cancel: 'Cancel',
-    never: 'never',
     save: 'Save',
-    add: 'Add',
     edit: 'Edit',
-    delete: 'Delete',
     refresh: 'Refresh',
-    close: 'Close',
     saved: 'Saved.',
   },
   errors: {
@@ -237,6 +232,7 @@ const en = {
     ai_off: 'The AI analysis is off.',
     ai_running: 'A pass is already running.',
     bad_request: 'The request could not be read. Reload the page and try again.',
+    internal: 'Something went wrong on the server. Its log says what.',
     not_found: 'It is not there any more. Reload the page.',
     signed_out: 'You are signed out. Sign in again.',
     too_many_attempts: 'Too many failed sign-ins. Try again in a few minutes.',
@@ -244,6 +240,8 @@ const en = {
     login_expired: 'The sign-in has expired. Enter the password again.',
     wrong_code: 'Wrong code.',
     wrong_password: 'The password is wrong.',
+    sessions_not_ended:
+      'The password is changed, but your other sessions could not be signed out. To sign them out, change it once more, with the new password as the current one.',
     password_short: 'A password is at least 10 characters.',
     password_long:
       'A password is at most 72 bytes (about 36 Persian or Russian letters, 24 Chinese).',
@@ -251,6 +249,7 @@ const en = {
     totp_not_started: 'Start the enrolment first.',
     bad_hours: 'The window is 1 hour to 7 days.',
     bad_country: 'A country is two letters, such as DE.',
+    bad_override: 'The provider and the city take at most {max} characters.',
   },
 }
 
@@ -270,7 +269,6 @@ const fa: Messages = {
     menu: 'منو',
   },
   login: {
-    title: 'ورود',
     username: 'نام کاربری',
     password: 'رمز',
     submit: 'ورود',
@@ -387,7 +385,8 @@ const fa: Messages = {
     key: 'کلید API',
     keySaved: 'ذخیره شده؛ برای عوض کردن بنویسید',
     keyNone: 'ندارد (مدل محلی کلید نمی‌خواهد)',
-    keyHint: 'در دیتابیس Insight نگه داشته می‌شود و دیگر نشان داده نمی‌شود.',
+    keyHint:
+      'در دیتابیس Insight نگه داشته می‌شود و دیگر نشان داده نمی‌شود. با تغییر پروتکل، میزبان یا پورت آدرس API، یا پروکسی، پاک می‌شود.',
     clearKey: 'حذف کلید',
     proxy: 'پروکسی (اختیاری)',
     budget: 'بودجهٔ روزانهٔ توکن',
@@ -472,14 +471,9 @@ const fa: Messages = {
     showPassword: 'نمایش',
     hidePassword: 'پنهان کردن',
     error: 'خطا',
-    cancel: 'انصراف',
-    never: 'هرگز',
     save: 'ذخیره',
-    add: 'افزودن',
     edit: 'ویرایش',
-    delete: 'حذف',
     refresh: 'تازه کردن',
-    close: 'بستن',
     saved: 'ذخیره شد.',
   },
   errors: {
@@ -490,6 +484,7 @@ const fa: Messages = {
     ai_off: 'تحلیل هوش مصنوعی خاموش است.',
     ai_running: 'یک تحلیل در حال اجراست.',
     bad_request: 'درخواست خوانده نشد. صفحه را دوباره بارگذاری کنید و دوباره امتحان کنید.',
+    internal: 'در سرور خطایی رخ داد. جزئیات در لاگ آن است.',
     not_found: 'دیگر وجود ندارد. صفحه را دوباره بارگذاری کنید.',
     signed_out: 'از حساب بیرون آمده‌اید. دوباره وارد شوید.',
     too_many_attempts: 'ورود ناموفق زیاد. چند دقیقهٔ دیگر امتحان کنید.',
@@ -497,12 +492,15 @@ const fa: Messages = {
     login_expired: 'زمان ورود گذشت. رمز را دوباره وارد کنید.',
     wrong_code: 'کد اشتباه است.',
     wrong_password: 'رمز اشتباه است.',
+    sessions_not_ended:
+      'رمز عوض شد، اما نشست‌های دیگرتان خارج نشدند. برای خارج کردنشان یک بار دیگر رمز را عوض کنید و رمز تازه را رمز فعلی بزنید.',
     password_short: 'رمز دست‌کم ۱۰ نویسه است.',
     password_long: 'رمز حداکثر ۷۲ بایت است (حدود ۳۶ حرف فارسی).',
     totp_on: 'ورود دومرحله‌ای از قبل روشن است.',
     totp_not_started: 'اول ثبت را شروع کنید.',
     bad_hours: 'بازه از ۱ ساعت تا ۷ روز است.',
     bad_country: 'کشور دو حرف است، مثل DE.',
+    bad_override: 'ارائه‌دهنده و شهر حداکثر {max} نویسه می‌گیرند.',
   },
 }
 
@@ -520,7 +518,6 @@ const ru: Messages = {
     menu: 'Меню',
   },
   login: {
-    title: 'Вход',
     username: 'Имя пользователя',
     password: 'Пароль',
     submit: 'Войти',
@@ -638,7 +635,8 @@ const ru: Messages = {
     key: 'Ключ API',
     keySaved: 'сохранён; введите, чтобы заменить',
     keyNone: 'нет (локальной модели не нужен)',
-    keyHint: 'Хранится в базе Insight и больше не показывается.',
+    keyHint:
+      'Хранится в базе Insight и больше не показывается. При смене схемы, хоста или порта адреса API либо прокси сбрасывается.',
     clearKey: 'Удалить ключ',
     proxy: 'Прокси (необязательно)',
     budget: 'Дневной бюджет токенов',
@@ -721,14 +719,9 @@ const ru: Messages = {
     showPassword: 'Показать',
     hidePassword: 'Скрыть',
     error: 'Ошибка',
-    cancel: 'Отмена',
-    never: 'никогда',
     save: 'Сохранить',
-    add: 'Добавить',
     edit: 'Изменить',
-    delete: 'Удалить',
     refresh: 'Обновить',
-    close: 'Закрыть',
     saved: 'Сохранено.',
   },
   errors: {
@@ -739,6 +732,7 @@ const ru: Messages = {
     ai_off: 'ИИ-анализ выключен.',
     ai_running: 'Анализ уже идёт.',
     bad_request: 'Запрос не прочитан. Обновите страницу и попробуйте снова.',
+    internal: 'На сервере произошла ошибка. Подробности — в его журнале.',
     not_found: 'Этого больше нет. Обновите страницу.',
     signed_out: 'Вы вышли. Войдите снова.',
     too_many_attempts: 'Слишком много неудачных входов. Попробуйте через несколько минут.',
@@ -746,12 +740,15 @@ const ru: Messages = {
     login_expired: 'Время входа истекло. Введите пароль снова.',
     wrong_code: 'Неверный код.',
     wrong_password: 'Неверный пароль.',
+    sessions_not_ended:
+      'Пароль изменён, но другие сеансы не удалось завершить. Чтобы завершить их, смените пароль ещё раз, указав новый как текущий.',
     password_short: 'Пароль — не меньше 10 символов.',
     password_long: 'Пароль — не больше 72 байт (около 36 русских букв).',
     totp_on: 'Двухфакторный вход уже включён.',
     totp_not_started: 'Сначала начните подключение.',
     bad_hours: 'Окно — от 1 часа до 7 дней.',
     bad_country: 'Страна — две буквы, например DE.',
+    bad_override: 'Провайдер и город — не длиннее {max} символов.',
   },
 }
 
@@ -769,7 +766,6 @@ const zh: Messages = {
     menu: '菜单',
   },
   login: {
-    title: '登录',
     username: '用户名',
     password: '密码',
     submit: '登录',
@@ -883,7 +879,8 @@ const zh: Messages = {
     key: 'API 密钥',
     keySaved: '已保存；输入以替换',
     keyNone: '无（本地模型不需要）',
-    keyHint: '保存在 Insight 的数据库中，不再显示。',
+    keyHint:
+      '保存在 Insight 的数据库中，不再显示。更改 API 地址的协议、主机或端口，或更改代理，会清除它。',
     clearKey: '删除密钥',
     proxy: '代理（可选）',
     budget: '每日 token 预算',
@@ -962,14 +959,9 @@ const zh: Messages = {
     showPassword: '显示',
     hidePassword: '隐藏',
     error: '错误',
-    cancel: '取消',
-    never: '从未',
     save: '保存',
-    add: '添加',
     edit: '编辑',
-    delete: '删除',
     refresh: '刷新',
-    close: '关闭',
     saved: '已保存。',
   },
   errors: {
@@ -980,6 +972,7 @@ const zh: Messages = {
     ai_off: 'AI 分析已关闭。',
     ai_running: '已有分析在运行。',
     bad_request: '无法读取请求。请刷新页面后重试。',
+    internal: '服务器出错了，详情见其日志。',
     not_found: '它已不存在。请刷新页面。',
     signed_out: '您已退出。请重新登录。',
     too_many_attempts: '登录失败次数过多。请几分钟后再试。',
@@ -987,12 +980,15 @@ const zh: Messages = {
     login_expired: '登录已过期。请重新输入密码。',
     wrong_code: '验证码错误。',
     wrong_password: '密码错误。',
+    sessions_not_ended:
+      '密码已更改，但其他会话未能退出。要让它们退出，请再更改一次密码，并以新密码作为当前密码。',
     password_short: '密码至少 10 个字符。',
     password_long: '密码最多 72 字节（约 24 个汉字）。',
     totp_on: '两步验证登录已开启。',
     totp_not_started: '请先开始绑定。',
     bad_hours: '时间范围为 1 小时到 7 天。',
     bad_country: '国家为两个字母，例如 DE。',
+    bad_override: '服务商和城市最多 {max} 个字符。',
   },
 }
 

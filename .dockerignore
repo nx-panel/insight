@@ -4,5 +4,7 @@ frontend/dist/*
 !frontend/dist/.gitkeep
 data
 .env
+**/.env
+**/*.key
 signed.json
 /insight

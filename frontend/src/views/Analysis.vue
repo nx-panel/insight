@@ -65,10 +65,13 @@ function fill(s: AISettings) {
   }
 }
 
-async function load() {
+// refresh is false while a pass runs: only the reports and the running flag
+// are read again then, so what the admin is typing into the form stays.
+async function load(refresh = true) {
   try {
     const [s, r, n] = await Promise.all([api.ai(), api.aiReports(), api.nodes().catch(() => [])])
-    fill(s)
+    if (refresh) fill(s)
+    else settings.value = s
     reports.value = r.reports
     orgs.value = r.orgs
     nodes.value = n
@@ -83,7 +86,7 @@ let timer: ReturnType<typeof setInterval> | undefined
 onMounted(async () => {
   await load()
   timer = setInterval(() => {
-    if (settings.value?.running) void load()
+    if (settings.value?.running) void load(false)
   }, 4000)
 })
 onUnmounted(() => clearInterval(timer))

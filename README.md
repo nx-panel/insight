@@ -8,13 +8,20 @@ retransmits. It warns when a path is blocked or an endpoint is being probed,
 and can put the links that work first in each user's subscription.
 
 Optionally, your own AI model — any OpenAI-compatible API with your key, or
-Ollama on your server — reads the paths once a day per client country and
-after each alert, and answers with findings checked against the numbers.
-Only aggregate counts per network, node number and inbound are sent; never an
-address or a node's name, and nothing goes to NX.
+Ollama on your server — reads the paths once a day, and after each alert,
+for each country whose regions are kept (`region_countries`: Iran, Russia
+and China unless you change it), and answers with findings checked against
+the numbers. What is sent, to your model and nowhere else: per network (its
+AS number and registered name), node number and inbound tag, the last 24
+hours' counts and ratios; each node's hosting country and provider (yours,
+where you corrected it on the Nodes page); the probing scores and how many
+alerts there were. Never a client's or a node's address and never a node's
+name. Names are cut down to forty letters, digits, spaces, dashes and
+underscores before they go — no dots, so no address or URL as written — but a tag or a provider
+name still says what it spells, so mind what you put in them. Nothing goes to NX.
 
 Client addresses never leave your server: the nodes report a /24 or /48
-prefix, Insight turns it into its network the moment it reads it and keeps
+prefix (/40 for a 6to4 address), Insight turns it into its network the moment it reads it and keeps
 nothing else.
 
 Status: in development (nx-panel `docs/path-telemetry.md`, phase 1). Needs a

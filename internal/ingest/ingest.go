@@ -22,10 +22,11 @@ import (
 	"time"
 
 	"github.com/nx-panel/addon-kit/panel"
-	"github.com/nx-panel/insight/internal/model"
-	"github.com/nx-panel/insight/internal/netinfo"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+
+	"github.com/nx-panel/insight/internal/model"
+	"github.com/nx-panel/insight/internal/netinfo"
 )
 
 const (
@@ -39,8 +40,12 @@ const (
 	TopK = 30
 	// pageLimit is the samples asked for per request.
 	pageLimit = 20000
+	// A sample older than the panel can have held it plus slack, or from
+	// the future, carries a wrong clock.
+	maxSampleAge   = 6 * 3600
+	maxSampleAhead = 3600
 	// OtherASN is the folded cell's ASN.
-	OtherASN = 0
+	OtherASN = model.OtherASN
 )
 
 // Poll states, for the admin web.
@@ -88,6 +93,31 @@ type NodeState struct {
 	State string `json:"state"`
 }
 
+// A node's state as the panel lists it: StateNodeOn is the one that counts
+// (the panel's gateway.PathNodeOn). StateSkewed is Insight's own: a node
+// whose clock is wrong enough that its samples are dropped.
+const (
+	StateNodeOn = "on"
+	StateSkewed = "skewed"
+)
+
+// Counting is the set of nodes a poll listed as counting, for the detector:
+// a node listed in any other state, or not listed at all — deleted — is not
+// in it. nil when the poll carried no list (an old panel), which is "not
+// known", never "none".
+func Counting(nodes []NodeState) map[uint]bool {
+	if nodes == nil {
+		return nil
+	}
+	counting := map[uint]bool{}
+	for _, n := range nodes {
+		if n.State == StateNodeOn {
+			counting[n.ID] = true
+		}
+	}
+	return counting
+}
+
 type page struct {
 	Active  bool        `json:"active"`
 	Cursor  uint64      `json:"cursor"`
@@ -105,6 +135,8 @@ type Status struct {
 	LastGap  time.Time   `json:"lastGap"`
 	Nodes    []NodeState `json:"nodes"`
 	Pending  int         `json:"pending"`
+	// Skewed counts the samples dropped for a timestamp far from now.
+	Skewed int `json:"skewed"`
 }
 
 type cellKey struct {
@@ -133,6 +165,11 @@ type Ingest struct {
 	// AfterFlush runs after each successful flush in Run: the detection and
 	// the hints work on what is now in the database.
 	AfterFlush func(ctx context.Context)
+	// Fed is told after every poll whether it worked — false for one that
+	// failed or was not made — and which nodes the panel listed. Gapped is
+	// told when the panel says it dropped samples before they were read.
+	Fed    func(ok bool, nodes []NodeState)
+	Gapped func()
 
 	mu      sync.Mutex
 	pending map[cellKey]*model.PathCounters
@@ -198,16 +235,38 @@ func (in *Ingest) pollLogged(ctx context.Context) {
 	}
 }
 
+// fed tells whoever watches the feed (the detector) how the poll went.
+func (in *Ingest) fed(ok bool, nodes []NodeState) {
+	if in.Fed != nil {
+		in.Fed(ok, nodes)
+	}
+}
+
 // Poll asks the panel for everything after the cursor, a page at a time.
 func (in *Ingest) Poll(ctx context.Context) error {
 	if in.Panel == nil {
+		in.fed(false, nil)
 		return nil
 	}
 	client := in.Panel()
 	if client == nil {
+		in.fed(false, nil)
 		return nil
 	}
+	// Not before the network tables are in: a sample looked up against
+	// nothing would be stored for good as "no network, no country". The
+	// panel keeps fifteen minutes for a reader that is late.
+	if in.Net != nil {
+		if asn, _ := in.Net.Loaded(); !asn {
+			in.mu.Lock()
+			in.status.Error = "waiting for the network database"
+			in.mu.Unlock()
+			in.fed(false, nil)
+			return nil
+		}
+	}
 	if err := in.loadCursor(); err != nil {
+		in.fed(false, nil)
 		return err
 	}
 	for range 50 { // a backlog of a million samples at most per poll
@@ -218,10 +277,32 @@ func (in *Ingest) Poll(ctx context.Context) error {
 		err := client.Get(ctx, "/telemetry/paths?since="+strconv.FormatUint(since, 10)+"&limit="+strconv.Itoa(pageLimit), &p)
 		if err != nil {
 			in.setError(err)
+			in.fed(false, nil)
 			return err
 		}
-		in.take(p)
-		if len(p.Samples) < pageLimit {
+		if p.Gap && in.Gapped != nil {
+			in.Gapped() // samples were dropped before they were read
+		}
+		skewed := in.take(p)
+		// A node whose samples were dropped for their timestamp is not
+		// being counted, whatever the panel says of it: without this its
+		// paths would read as silent, and silence as a block.
+		nodes := p.Nodes
+		if len(skewed) > 0 && nodes != nil {
+			// A copy, never nil for a list that came empty: nil is "the
+			// poll carried no list" (Counting).
+			nodes = append(make([]NodeState, 0, len(p.Nodes)), p.Nodes...)
+			for i := range nodes {
+				if skewed[nodes[i].ID] {
+					nodes[i].State = StateSkewed
+				}
+			}
+		}
+		in.fed(true, nodes)
+		in.mu.Lock()
+		stuck := in.cursor == since
+		in.mu.Unlock()
+		if len(p.Samples) < pageLimit || stuck {
 			return nil
 		}
 	}
@@ -246,7 +327,7 @@ func (in *Ingest) setError(err error) {
 // take adds one page into the pending cells. A sample's prefix is read
 // here, looked up and dropped: it is never stored and never leaves this
 // function.
-func (in *Ingest) take(p page) {
+func (in *Ingest) take(p page) (skewed map[uint]bool) {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	now := in.now()
@@ -260,6 +341,16 @@ func (in *Ingest) take(p page) {
 		in.pending = map[cellKey]*model.PathCounters{}
 	}
 	for _, s := range p.Samples {
+		// A sample stamped far from now is a node whose clock is wrong: its
+		// hour would be compacted and deleted within the day, silently.
+		if d := now.Unix() - s.DateTime; d > maxSampleAge || d < -maxSampleAhead {
+			in.status.Skewed++
+			if skewed == nil {
+				skewed = map[uint]bool{}
+			}
+			skewed[s.NodeID] = true
+			continue
+		}
 		var info netinfo.Info
 		if pfx, err := netip.ParsePrefix(s.Prefix); err == nil && in.Net != nil {
 			info = in.Net.Lookup(pfx.Addr())
@@ -280,7 +371,15 @@ func (in *Ingest) take(p page) {
 			in.Observe(s.NodeID, s.Inbound, info.ASN, s.Network, one)
 		}
 	}
-	in.cursor = max(in.cursor, p.Cursor)
+	// The panel's cursor, also when it is behind ours: a panel that
+	// restarted (or another panel, or a restored database) numbers from
+	// somewhere else and answers a cursor it never gave with everything it
+	// holds and gap set. Keeping the larger one would ask for, and add, all
+	// of that again on every poll.
+	if p.Gap || p.Cursor > in.cursor {
+		in.cursor = p.Cursor
+	}
+	return skewed
 }
 
 func add(c *model.PathCounters, s Sample) {

@@ -3,14 +3,17 @@ package ingest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"gorm.io/gorm"
 
 	"github.com/nx-panel/insight/internal/model"
 	"github.com/nx-panel/insight/internal/netinfo"
-	"gorm.io/gorm"
 )
 
 // Nodes keeps node_netinfo: each node's host network, read from the
@@ -41,11 +44,22 @@ func (n *Nodes) Refresh(ctx context.Context) error {
 	if n.Panel == nil || n.Panel() == nil {
 		return nil
 	}
+	// Every page: a node past the first one would otherwise have no network
+	// here and lose its row — and the admin's correction with it — below.
 	var list struct {
 		Items []panelNode `json:"items"`
 	}
-	if err := n.Panel().Get(ctx, "/nodes?limit=1000", &list); err != nil {
-		return err
+	for offset := 0; ; offset += nodesPage {
+		var page struct {
+			Items []panelNode `json:"items"`
+		}
+		if err := n.Panel().Get(ctx, fmt.Sprintf("/nodes?limit=%d&offset=%d", nodesPage, offset), &page); err != nil {
+			return err
+		}
+		list.Items = append(list.Items, page.Items...)
+		if len(page.Items) < nodesPage || offset > 100*nodesPage {
+			break
+		}
 	}
 	addrs := map[uint]netip.Addr{}
 	var scan []netip.Addr
@@ -134,16 +148,32 @@ func (n *Nodes) addressOf(ctx context.Context, node panelNode) (netip.Addr, bool
 	return got[0].Unmap(), true
 }
 
+// What the admin has to correct in an override.
+var (
+	ErrCountry  = errors.New("country must be a two-letter code")
+	ErrOverride = errors.New("the provider or the city is too long")
+)
+
+const (
+	// OverrideMax is the most characters a provider or city takes.
+	OverrideMax = 64
+	nodesPage   = 500
+)
+
 // Override sets what the admin says a node's network is; empty fields and
 // a zero ASN put the database's answer back.
 func Override(db *gorm.DB, nodeID uint, asn uint32, org, country, city string) error {
 	country = strings.ToUpper(strings.TrimSpace(country))
-	if country != "" && len(country) != 2 {
-		return errors.New("country must be a two-letter code")
+	org, city = strings.TrimSpace(org), strings.TrimSpace(city)
+	if country != "" && (len(country) != 2 || country[0] < 'A' || country[0] > 'Z' || country[1] < 'A' || country[1] > 'Z') {
+		return ErrCountry
+	}
+	if utf8.RuneCountInString(org) > OverrideMax || utf8.RuneCountInString(city) > OverrideMax {
+		return ErrOverride
 	}
 	res := db.Model(&model.NodeNetinfo{}).Where("node_id = ?", nodeID).Updates(map[string]any{
-		"override_asn": asn, "override_org": strings.TrimSpace(org),
-		"override_country": country, "override_city": strings.TrimSpace(city),
+		"override_asn": asn, "override_org": org,
+		"override_country": country, "override_city": city,
 	})
 	if res.Error != nil {
 		return res.Error

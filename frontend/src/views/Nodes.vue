@@ -133,7 +133,7 @@ const overridden = (n: NodeInfo) =>
         </div>
         <div class="field">
           <label for="o-org">{{ t('nodes.org') }}</label>
-          <InputText id="o-org" v-model="form.org" />
+          <InputText id="o-org" v-model="form.org" maxlength="64" />
         </div>
         <div class="field">
           <label for="o-cc">{{ t('nodes.country') }}</label>
@@ -141,7 +141,7 @@ const overridden = (n: NodeInfo) =>
         </div>
         <div class="field">
           <label for="o-city">{{ t('nodes.city') }}</label>
-          <InputText id="o-city" v-model="form.city" />
+          <InputText id="o-city" v-model="form.city" maxlength="64" />
         </div>
         <p class="muted small">{{ t('nodes.emptyKeeps') }}</p>
         <div class="actions">

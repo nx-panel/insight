@@ -59,6 +59,10 @@ func (c *Client) Complete(ctx context.Context, s Settings, user string) (Answer,
 			return Answer{}, err
 		}
 		hc.Timeout = callTimeout
+		// The address is the admin's, and so is where the key goes: a
+		// redirect would send the table, and on the same host the key,
+		// somewhere the admin did not name.
+		hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	}
 	for range 3 {
 		a, err := c.complete(ctx, hc, s, user, !c.plainJSON.Load())

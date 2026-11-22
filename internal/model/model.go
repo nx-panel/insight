@@ -4,6 +4,11 @@
 // ASN lookup (nx-panel docs/path-telemetry.md §4.4, exit criterion 1).
 package model
 
+import (
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
 // PathCounters are the additive counters of one cell. Medians do not add,
 // so durations and RTTs are kept as weighted sums the readers divide.
 type PathCounters struct {
@@ -128,6 +133,18 @@ type State struct {
 }
 
 func (State) TableName() string { return "state" }
+
+// PutState writes one state row, replacing the value it had.
+func PutState(tx *gorm.DB, key, value string) error {
+	return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "key"}}, DoUpdates: clause.AssignmentColumns([]string{"value"})}).
+		Create(&State{Key: key, Value: value}).Error
+}
+
+// OtherASN is the client ASN of everything without one of its own: prefixes
+// no network announces, and the networks past the top-K an hour keeps
+// (internal/ingest). It is a different mix every hour, so it is no network
+// to judge, order links for, or tell a model about.
+const OtherASN uint32 = 0
 
 // Admin is one of Insight's own admins (the panel's are not Insight's).
 type Admin struct {

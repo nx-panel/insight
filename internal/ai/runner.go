@@ -4,13 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"sync"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/nx-panel/insight/internal/detect"
 	"github.com/nx-panel/insight/internal/model"
-	"gorm.io/gorm"
 )
 
 // When passes run (§4.8: event-driven beyond the daily pass).
@@ -76,6 +78,8 @@ type Runner struct {
 	mu      sync.Mutex
 	fails   int
 	until   time.Time
+	// breakerLoaded is whether fails and until were read from the database.
+	breakerLoaded bool
 }
 
 func (r *Runner) now() time.Time {
@@ -133,13 +137,14 @@ func (r *Runner) RunNow(ctx context.Context, country string) bool {
 }
 
 func (r *Runner) due(ctx context.Context) error {
-	s, err := Load(ctx, r.DB)
-	if err != nil || !s.Enabled {
-		return err
-	}
 	now := r.now()
 	tx := r.DB.WithContext(ctx)
+	// Whether or not it is on: turned off, the reports it left still age out.
 	if err := tx.Where("at < ?", now.AddDate(0, 0, -ReportDays).Unix()).Delete(&Report{}).Error; err != nil {
+		return err
+	}
+	s, err := Load(ctx, r.DB)
+	if err != nil || !s.Enabled {
 		return err
 	}
 	for _, country := range r.Countries {
@@ -183,16 +188,26 @@ func (r *Runner) alertedSince(ctx context.Context, country string, since int64) 
 		[]string{detect.KindDegraded, detect.KindOutage, detect.KindProbed}).Find(&alerts).Error; err != nil {
 		return false, err
 	}
+	if len(alerts) == 0 {
+		return false, nil
+	}
 	for _, a := range alerts {
 		if a.Kind == detect.KindProbed {
 			return true, nil
 		}
-		var n int64
-		if err := tx.Model(&model.PathHour{}).Where("client_asn = ? AND country = ? AND hour >= ?",
-			a.ASN, country, r.now().Add(-Window).Unix()).Count(&n).Error; err != nil {
-			return false, err
-		}
-		if n > 0 {
+	}
+	// The country's networks once, not once per alert.
+	var seen []uint32
+	if err := tx.Model(&model.PathHour{}).Where("country = ? AND hour >= ?", country, r.now().Add(-Window).Unix()).
+		Distinct().Pluck("client_asn", &seen).Error; err != nil {
+		return false, err
+	}
+	here := make(map[uint32]bool, len(seen))
+	for _, a := range seen {
+		here[a] = true
+	}
+	for _, a := range alerts {
+		if here[a.ASN] {
 			return true, nil
 		}
 	}
@@ -215,6 +230,7 @@ func (r *Runner) pass(ctx context.Context, country, trigger string) (Report, err
 		return rep, nil
 	}
 	rep.Model = s.Model
+	r.loadBreaker(ctx)
 	r.mu.Lock()
 	held := trigger != TriggerManual && now.Before(r.until)
 	r.mu.Unlock()
@@ -236,11 +252,14 @@ func (r *Runner) pass(ctx context.Context, country, trigger string) (Report, err
 		return rep, err
 	}
 	if used+(len(systemPrompt)+len(user))/4 > s.DailyTokens {
-		// One budget report a day per country is enough to say why.
 		var n int64
 		day := now.UTC().Truncate(24 * time.Hour).Unix()
-		if err := r.DB.WithContext(ctx).Model(&Report{}).Where("country = ? AND status = ? AND at >= ?", country, StatusBudget, day).Count(&n).Error; err != nil || n > 0 {
-			return rep, err
+		// One budget report a day per country is enough to say why — but a
+		// pass the admin asked for always gets its answer.
+		if trigger != TriggerManual {
+			if err := r.DB.WithContext(ctx).Model(&Report{}).Where("country = ? AND status = ? AND at >= ?", country, StatusBudget, day).Count(&n).Error; err != nil || n > 0 {
+				return rep, err
+			}
 		}
 		rep.Status = StatusBudget
 		return rep, r.store(ctx, &rep)
@@ -271,8 +290,35 @@ func (r *Runner) pass(ctx context.Context, country, trigger string) (Report, err
 	} else {
 		r.fails, r.until = 0, time.Time{}
 	}
+	state := fmt.Sprintf("%d %d", r.fails, r.until.Unix())
 	r.mu.Unlock()
+	// Kept across a restart: a service that crashes and comes back every
+	// minute must not call a failing provider every minute.
+	if err := model.PutState(r.DB.WithContext(ctx), stateBreaker, state); err != nil {
+		log.Printf("ai: saving the breaker: %v", err)
+	}
 	return rep, r.store(ctx, &rep)
+}
+
+const stateBreaker = "ai_breaker"
+
+// loadBreaker reads the breaker a previous run left, once.
+func (r *Runner) loadBreaker(ctx context.Context) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.breakerLoaded {
+		return
+	}
+	r.breakerLoaded = true
+	var st model.State
+	if err := r.DB.WithContext(ctx).Where("key = ?", stateBreaker).Limit(1).Find(&st).Error; err != nil || st.Value == "" {
+		return
+	}
+	var fails int
+	var until int64
+	if _, err := fmt.Sscan(st.Value, &fails, &until); err == nil && until > 0 {
+		r.fails, r.until = fails, time.Unix(until, 0)
+	}
 }
 
 func (r *Runner) store(ctx context.Context, rep *Report) error {

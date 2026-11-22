@@ -102,6 +102,7 @@ export interface Cell {
   failed: number
   earlyClose: number
   rttMs: number
+  rttN: number
   retransPpm: number
   up: number
   down: number

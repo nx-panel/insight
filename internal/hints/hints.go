@@ -23,9 +23,10 @@ import (
 	"sync"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/nx-panel/insight/internal/detect"
 	"github.com/nx-panel/insight/internal/model"
-	"gorm.io/gorm"
 )
 
 const (
@@ -38,7 +39,12 @@ const (
 	RefreshEvery = time.Hour
 	// minAccepted is the traffic below which a path is not ranked.
 	minAccepted = 10
-	maxCIDRs    = 200000
+	// margin is how much better a node or inbound must score than the one
+	// ahead of it before the pushed order changes: ratios from a few dozen
+	// connections wobble by a few points every flush, and each reorder is a
+	// PUT and a reshuffled subscription for the whole network.
+	margin   = 0.1
+	maxCIDRs = 200000
 )
 
 // Document is the panel's order-hints body.
@@ -142,6 +148,20 @@ func (h *Hints) Compute(ctx context.Context) (Document, error) {
 		}
 		perASN[r.ClientASN][r.NodeID] = mergeTag(perASN[r.ClientASN][r.NodeID], scored{r.Inbound, s})
 	}
+	// A degraded path ranks last whether or not it still has traffic in the
+	// window: one that has been dead for the whole of it has no row to be
+	// ranked by, and dropping it would drop its node, and with one node left
+	// the network's whole group — the panel's default order back exactly
+	// when the order matters.
+	for k := range degraded {
+		if k.ASN == detect.OtherASN {
+			continue
+		}
+		if perASN[k.ASN] == nil {
+			perASN[k.ASN] = map[uint][]scored{}
+		}
+		perASN[k.ASN][k.Node] = mergeTag(perASN[k.ASN][k.Node], scored{k.Inbound, -1})
+	}
 	h.mu.Lock()
 	last := h.last
 	h.mu.Unlock()
@@ -149,20 +169,20 @@ func (h *Hints) Compute(ctx context.Context) (Document, error) {
 	groups := map[uint32]Group{}
 	for asn, nodes := range perASN {
 		if outages[asn] {
-			if g, ok := last[asn]; ok {
-				groups[asn] = g // left as it was
-			}
 			continue
 		}
 		if len(nodes) < 2 {
 			continue // one node: nothing to order
 		}
-		groups[asn] = order(asn, nodes)
+		groups[asn] = order(asn, nodes, last[asn])
 		want[asn] = true
 	}
-	// An ASN in an outage with no group pushed before gets none now either.
+	// An ASN in an outage keeps the group it had, however long the outage
+	// and whatever traffic is left; one with no group pushed before (or
+	// since Insight started) gets none now either.
 	for asn := range outages {
-		if _, ok := groups[asn]; ok {
+		if g, ok := last[asn]; ok {
+			groups[asn] = g
 			want[asn] = true
 		}
 	}
@@ -180,8 +200,18 @@ func (h *Hints) Compute(ctx context.Context) (Document, error) {
 	for _, asn := range asns {
 		g := groups[asn]
 		if len(g.CIDRs) == 0 {
+			// Nothing narrower than a client prefix: the panel keeps no
+			// narrower one (it must never hold one client's address), and a
+			// few announced ranges are. Widened here, once each.
+			seen := map[netip.Prefix]bool{}
 			for _, p := range prefixes[asn] {
-				g.CIDRs = append(g.CIDRs, p.String())
+				if widest := clientPrefixBits(p.Addr()); p.Bits() > widest {
+					p = netip.PrefixFrom(p.Addr(), widest).Masked()
+				}
+				if !seen[p] {
+					seen[p] = true
+					g.CIDRs = append(g.CIDRs, p.String())
+				}
 			}
 		}
 		if len(g.CIDRs) == 0 || total+len(g.CIDRs) > maxCIDRs {
@@ -207,37 +237,64 @@ func mergeTag(list []scored, s scored) []scored {
 	return append(list, s)
 }
 
-func order(asn uint32, nodes map[uint][]scored) Group {
-	type nodeScore struct {
-		id    uint
-		score float64
-	}
-	var ns []nodeScore
+func order(asn uint32, nodes map[uint][]scored, prev Group) Group {
 	g := Group{ASN: asn, Order: Order{Inbounds: map[string][]string{}}}
+	best := map[uint]float64{}
+	ids := make([]uint, 0, len(nodes))
 	for id, ins := range nodes {
-		sort.SliceStable(ins, func(i, j int) bool {
-			if ins[i].score != ins[j].score {
-				return ins[i].score > ins[j].score
-			}
-			return ins[i].tag < ins[j].tag
-		})
-		tags := make([]string, len(ins))
-		for i, in := range ins {
-			tags[i] = in.tag
+		key := strconv.FormatUint(uint64(id), 10)
+		scores := map[string]float64{}
+		tags := make([]string, 0, len(ins))
+		for _, in := range ins {
+			scores[in.tag] = in.score
+			tags = append(tags, in.tag)
 		}
-		g.Order.Inbounds[strconv.FormatUint(uint64(id), 10)] = tags
-		ns = append(ns, nodeScore{id, ins[0].score})
-	}
-	sort.Slice(ns, func(i, j int) bool {
-		if ns[i].score != ns[j].score {
-			return ns[i].score > ns[j].score
+		tags = settle(prev.Order.Inbounds[key], tags, scores, func(a, b string) bool { return a < b })
+		g.Order.Inbounds[key] = tags
+		best[id] = scores[tags[0]]
+		for _, sc := range scores {
+			best[id] = max(best[id], sc)
 		}
-		return ns[i].id < ns[j].id
-	})
-	for _, n := range ns {
-		g.Order.Nodes = append(g.Order.Nodes, n.id)
+		ids = append(ids, id)
 	}
+	g.Order.Nodes = settle(prev.Order.Nodes, ids, best, func(a, b uint) bool { return a < b })
 	return g
+}
+
+// settle orders items by score, best first — unless prev holds the same
+// items in an order no pair of which is wrong by more than margin, which is
+// then kept.
+func settle[T comparable](prev, items []T, score map[T]float64, less func(a, b T) bool) []T {
+	if len(prev) == len(items) {
+		same := true
+		for i, p := range prev {
+			if _, ok := score[p]; !ok {
+				same = false
+				break
+			}
+			// Against every item ahead of it, not only its neighbour: steps
+			// of less than the margin each can add up to an order that is
+			// plainly upside down.
+			for _, ahead := range prev[:i] {
+				if score[p] > score[ahead]+margin {
+					same = false
+				}
+			}
+			if !same {
+				break
+			}
+		}
+		if same {
+			return append([]T(nil), prev...)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if score[items[i]] != score[items[j]] {
+			return score[items[i]] > score[items[j]]
+		}
+		return less(items[i], items[j])
+	})
+	return items
 }
 
 // Push computes the document and PUTs it when it changed, or when the one
@@ -279,4 +336,19 @@ func (h *Hints) Push(ctx context.Context) error {
 	h.mu.Unlock()
 	log.Printf("hints: pushed %d groups", len(doc.Groups))
 	return nil
+}
+
+// clientPrefixBits is the panel's rule (nx-panel pkg/coreapi
+// ClientPrefixBits), which the panel applies again whatever is sent: /24,
+// /48, and /40 for a 6to4 address, whose /48 is one IPv4 client.
+func clientPrefixBits(addr netip.Addr) int {
+	addr = addr.Unmap()
+	switch {
+	case addr.Is4():
+		return 24
+	case addr.As16()[0] == 0x20 && addr.As16()[1] == 0x02:
+		return 40
+	default:
+		return 48
+	}
 }

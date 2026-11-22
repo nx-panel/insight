@@ -35,6 +35,8 @@ import (
 	"github.com/nx-panel/addon-kit/addon"
 	"github.com/nx-panel/addon-kit/manifest"
 	"github.com/nx-panel/addon-kit/panel"
+	"gorm.io/gorm"
+
 	"github.com/nx-panel/insight/frontend"
 	"github.com/nx-panel/insight/internal/admins"
 	"github.com/nx-panel/insight/internal/ai"
@@ -47,7 +49,6 @@ import (
 	"github.com/nx-panel/insight/internal/model"
 	"github.com/nx-panel/insight/internal/netinfo"
 	"github.com/nx-panel/insight/internal/web"
-	"gorm.io/gorm"
 )
 
 //go:embed nx-addon.json
@@ -156,14 +157,42 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("telegram_proxy: %w", err)
 	}
+	bg, stopBg := context.WithCancel(context.Background())
+	defer stopBg()
+	// Alerts are sent off the poll's goroutine: Telegram unreachable (the
+	// usual state of a server in Iran or Russia without a proxy) at twenty
+	// seconds an alert would hold the next polls back past what the panel
+	// keeps, and the hole would read as more drops. A burst past the queue
+	// loses its oldest sends; every alert is in the database either way.
 	var send func(context.Context, detect.Alert)
 	if tg != nil {
-		send = tg.Send
+		queue := make(chan detect.Alert, 256)
+		send = func(_ context.Context, a detect.Alert) {
+			for {
+				select {
+				case queue <- a:
+					return
+				default:
+				}
+				select {
+				case <-queue:
+				default:
+				}
+			}
+		}
+		go func() {
+			for {
+				select {
+				case <-bg.Done():
+					return
+				case a := <-queue:
+					tg.Send(bg, a)
+				}
+			}
+		}()
 	}
 	in, det, _ := pipeline(gdb, net, client, send)
 
-	bg, stopBg := context.WithCancel(context.Background())
-	defer stopBg()
 	// Mode A: the admin's own model reads the paths after a flush when a
 	// pass is due (internal/ai); off until the admin sets it up.
 	brain := &ai.Runner{DB: gdb, State: det, Org: net.Org, Countries: cfg.RegionCountries}
@@ -188,6 +217,12 @@ func run() error {
 			if err := ingest.Compact(bg, gdb, time.Now()); err != nil {
 				log.Printf("retention: %v", err)
 			}
+			if err := det.Prune(bg); err != nil {
+				log.Printf("retention: %v", err)
+			}
+			if err := admins.SweepSessions(gdb.WithContext(bg), time.Now()); err != nil {
+				log.Printf("retention: %v", err)
+			}
 		})
 	})
 
@@ -198,7 +233,10 @@ func run() error {
 		}
 	}
 	app := web.New(gdb, a, cfg, a.Manifest().Version, spa, web.Parts{Ingest: in, Detect: det, Net: net, AI: brain, Countries: cfg.RegionCountries})
-	srv := &http.Server{Addr: cfg.Addr(), Handler: app.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{
+		Addr: cfg.Addr(), Handler: app.Handler(),
+		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute,
+	}
 	log.Printf("nx insight %s on %s (%s)", a.Manifest().Version, cfg.Addr(), cfg.Driver)
 	httpsCtx, stopHTTPS := context.WithCancel(context.Background())
 	defer stopHTTPS()
@@ -292,7 +330,7 @@ func every(ctx context.Context, d time.Duration, f func()) {
 // judges the paths and the endpoints' probe evidence and the hints are
 // pushed.
 func pipeline(gdb *gorm.DB, net *netinfo.DB, client func() ingest.Getter, send func(context.Context, detect.Alert)) (*ingest.Ingest, *detect.Detector, *hints.Hints) {
-	det := &detect.Detector{DB: gdb, Send: send, Started: time.Now()}
+	det := &detect.Detector{DB: gdb, Send: send}
 	hint := &hints.Hints{DB: gdb, Prefixes: net.Prefixes, State: det, Panel: func() hints.Putter {
 		if p, ok := client().(hints.Putter); ok {
 			return p
@@ -303,6 +341,14 @@ func pipeline(gdb *gorm.DB, net *netinfo.DB, client func() ingest.Getter, send f
 		DB: gdb, Net: net, Panel: client,
 		Observe: func(node uint, inbound string, asn uint32, network string, c model.PathCounters) {
 			det.Observe(detect.Key{Node: node, Inbound: inbound, ASN: asn, Network: network}, c)
+		},
+		Gapped: det.Gapped,
+		Fed: func(ok bool, nodes []ingest.NodeState) {
+			if !ok {
+				det.Lost()
+				return
+			}
+			det.Covered(ingest.Counting(nodes))
 		},
 		AfterFlush: func(ctx context.Context) {
 			if err := det.Evaluate(ctx); err != nil {

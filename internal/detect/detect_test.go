@@ -6,11 +6,12 @@ import (
 	"testing"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/nx-panel/insight/internal/config"
 	"github.com/nx-panel/insight/internal/db"
 	"github.com/nx-panel/insight/internal/detect"
 	"github.com/nx-panel/insight/internal/model"
-	"gorm.io/gorm"
 )
 
 // openDB is a fresh SQLite database, or the PostgreSQL one
@@ -232,5 +233,364 @@ func TestARestartIsNotADrop(t *testing.T) {
 	}
 	if got := kinds(t, gdb); len(got) != 0 {
 		t.Fatalf("a path at its rate after a restart: %v", got)
+	}
+}
+
+// run feeds one five-minute bucket and evaluates, n times.
+func run(t *testing.T, d *detect.Detector, c *clock, n int, feed func()) {
+	t.Helper()
+	for range n {
+		if feed != nil {
+			feed()
+		}
+		c.step(detect.BucketEvery)
+		if err := d.Evaluate(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestABlockThatLastsStaysABlock: the hours a path is down in are not folded
+// into its normal. Folded, the mean sank toward the blocked value and the
+// variance grew until the block read as normal: path.recovered two hours and
+// twenty minutes into a block still going on (QA, 2026-11-22).
+func TestABlockThatLastsStaysABlock(t *testing.T) {
+	gdb := openDB(t)
+	c := &clock{time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)}
+	d := &detect.Detector{DB: gdb, Now: c.now, Started: c.t}
+	k := detect.Key{Node: 1, Inbound: "vless", ASN: 44244, Network: "tcp"}
+	other := detect.Key{Node: 2, Inbound: "vless", ASN: 44244, Network: "tcp"}
+	normal(gdb, t, k)
+	normal(gdb, t, other)
+	cell := func(node uint) model.PathCell {
+		return model.PathCell{NodeID: node, Inbound: "vless", ClientASN: 44244, Country: "IR", Network: "tcp", SourceKind: "peer"}
+	}
+	for h := range 6 {
+		hour := c.t.Truncate(time.Hour).Unix()
+		run(t, d, c, 12, func() {
+			traffic(d, k, 40, 1, 38)
+			traffic(d, other, 11, 10, 0)
+		})
+		gdb.Create(&model.PathHour{Hour: hour, PathCell: cell(1), PathCounters: model.PathCounters{Accepted: 480, Authed: 12, FailedAuth: 456}})
+		gdb.Create(&model.PathHour{Hour: hour, PathCell: cell(2), PathCounters: model.PathCounters{Accepted: 132, Authed: 120}})
+		if got := kinds(t, gdb); len(got) != 1 || got[0] != detect.KindDegraded {
+			t.Fatalf("hour %d of the block: alerts %v, want the one degraded", h+1, got)
+		}
+	}
+	var b detect.Baseline
+	gdb.Where("node_id = 1 AND slot = ?", detect.RecentSlot).First(&b)
+	if b.MeanAuthed != 120 || b.N != 24 {
+		t.Fatalf("the blocked path's normal moved: %+v", b)
+	}
+	var healthy detect.Baseline
+	gdb.Where("node_id = 2 AND slot = ?", detect.RecentSlot).First(&healthy)
+	if healthy.N <= 24 {
+		t.Fatalf("the healthy path's normal did not learn: %+v", healthy)
+	}
+	if !d.Degraded()[k] {
+		t.Fatal("the path is no longer degraded")
+	}
+}
+
+// TestARestartKeepsWhatIsDown: a degraded path is not alerted again by the
+// process that starts after it, and its recovery is still said.
+func TestARestartKeepsWhatIsDown(t *testing.T) {
+	gdb := openDB(t)
+	c := &clock{time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)}
+	d := &detect.Detector{DB: gdb, Now: c.now, Started: c.t}
+	k := detect.Key{Node: 1, Inbound: "vless", ASN: 44244, Network: "tcp"}
+	other := detect.Key{Node: 2, Inbound: "vless", ASN: 44244, Network: "tcp"}
+	normal(gdb, t, k)
+	normal(gdb, t, other)
+	bad := func(d *detect.Detector) func() {
+		return func() { traffic(d, k, 40, 1, 38); traffic(d, other, 11, 10, 0) }
+	}
+	run(t, d, c, 4, bad(d))
+	if got := kinds(t, gdb); len(got) != 1 || got[0] != detect.KindDegraded {
+		t.Fatalf("before the restart: %v", got)
+	}
+	again := &detect.Detector{DB: gdb, Now: c.now, Started: c.t}
+	run(t, again, c, 6, bad(again))
+	if got := kinds(t, gdb); len(got) != 1 {
+		t.Fatalf("after the restart, still blocked: %v", got)
+	}
+	if !again.Degraded()[k] {
+		t.Fatal("the restart forgot the path is down")
+	}
+	run(t, again, c, 6, func() { traffic(again, k, 11, 10, 0); traffic(again, other, 11, 10, 0) })
+	if got := kinds(t, gdb); len(got) != 2 || got[1] != detect.KindRecovered {
+		t.Fatalf("after it cleared: %v", got)
+	}
+	var left int64
+	gdb.Model(&detect.PathState{}).Count(&left)
+	if left != 0 {
+		t.Fatalf("%d states left after the recovery", left)
+	}
+}
+
+// TestNoDataIsNotNoTraffic: while the panel cannot be polled nothing is
+// judged, and when the feed is back the window starts again — a panel
+// restart must not read as every path dropping and every network cut off.
+func TestNoDataIsNotNoTraffic(t *testing.T) {
+	gdb := openDB(t)
+	c := &clock{time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)}
+	d := &detect.Detector{DB: gdb, Now: c.now}
+	keys := []detect.Key{
+		{Node: 1, Inbound: "a", ASN: 44244, Network: "tcp"},
+		{Node: 2, Inbound: "a", ASN: 44244, Network: "tcp"},
+	}
+	for _, k := range keys {
+		normal(gdb, t, k)
+	}
+	feed := func() {
+		d.Covered(nil)
+		for _, k := range keys {
+			traffic(d, k, 11, 10, 0)
+		}
+	}
+	run(t, d, c, 6, feed)
+	run(t, d, c, 8, d.Lost) // forty minutes of failed polls
+	run(t, d, c, 6, feed)
+	if got := kinds(t, gdb); len(got) != 0 {
+		t.Fatalf("a broken feed raised %v", got)
+	}
+	// A node that is switched off sends nothing either, and that is not a
+	// block of its paths.
+	run(t, d, c, 6, func() {
+		d.Covered(map[uint]bool{1: true}) // node 2 is not counting
+		traffic(d, keys[0], 11, 10, 0)
+	})
+	if got := kinds(t, gdb); len(got) != 0 {
+		t.Fatalf("a node that is off raised %v", got)
+	}
+}
+
+// TestTheRestIsNotANetwork: ASN 0 is whatever had no network of its own in
+// an hour. It has no normal, is never degraded and never "cut off".
+func TestTheRestIsNotANetwork(t *testing.T) {
+	gdb := openDB(t)
+	c := &clock{time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)}
+	d := &detect.Detector{DB: gdb, Now: c.now, Started: c.t}
+	for _, node := range []uint{1, 2} {
+		normal(gdb, t, detect.Key{Node: node, Inbound: "a", ASN: detect.OtherASN, Network: "tcp"})
+	}
+	run(t, d, c, 6, nil)
+	if got := kinds(t, gdb); len(got) != 0 {
+		t.Fatalf("ASN 0 raised %v", got)
+	}
+}
+
+// TestAQuietPathIsNotADrop: a path whose normal expects a handful of
+// sessions in the window is not judged a drop for having none.
+func TestAQuietPathIsNotADrop(t *testing.T) {
+	gdb := openDB(t)
+	c := &clock{time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)}
+	d := &detect.Detector{DB: gdb, Now: c.now, Started: c.t}
+	b := detect.Baseline{NodeID: 1, Inbound: "a", ASN: 44244, Network: "tcp", Slot: detect.RecentSlot, N: 24, MeanAuthed: 24, VarAuthed: 4}
+	if err := gdb.Create(&b).Error; err != nil {
+		t.Fatal(err)
+	}
+	run(t, d, c, 6, nil)
+	if got := kinds(t, gdb); len(got) != 0 {
+		t.Fatalf("a quiet path raised %v", got)
+	}
+}
+
+// TestAnOutageThatEndsSaysWhatIsStillDown: the paths of a network that came
+// back, all but one, were never alerted while the outage spoke for them; the
+// one still down is said when the outage ends.
+func TestAnOutageThatEndsSaysWhatIsStillDown(t *testing.T) {
+	gdb := openDB(t)
+	c := &clock{time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)}
+	d := &detect.Detector{DB: gdb, Now: c.now, Started: c.t}
+	keys := []detect.Key{
+		{Node: 1, Inbound: "a", ASN: 44244, Network: "tcp"},
+		{Node: 1, Inbound: "b", ASN: 44244, Network: "tcp"},
+		{Node: 2, Inbound: "a", ASN: 44244, Network: "tcp"},
+	}
+	for _, k := range keys {
+		normal(gdb, t, k)
+	}
+	run(t, d, c, 6, nil)
+	run(t, d, c, 8, func() {
+		traffic(d, keys[1], 11, 10, 0)
+		traffic(d, keys[2], 11, 10, 0)
+	})
+	got := kinds(t, gdb)
+	if len(got) != 3 || got[0] != detect.KindOutage || got[1] != detect.KindOutageEnd || got[2] != detect.KindDegraded {
+		t.Fatalf("alerts = %v, want the outage, its end, and the path still down", got)
+	}
+}
+
+// TestNodesGoingOffDoNotEndAnOutage: with a network cut off and its nodes
+// then unreachable for an evaluation, its paths are not judged — and that is
+// not the outage ending.
+func TestNodesGoingOffDoNotEndAnOutage(t *testing.T) {
+	gdb := openDB(t)
+	c := &clock{time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)}
+	d := &detect.Detector{DB: gdb, Now: c.now, Started: c.t}
+	for _, node := range []uint{1, 2} {
+		normal(gdb, t, detect.Key{Node: node, Inbound: "a", ASN: 44244, Network: "tcp"})
+	}
+	run(t, d, c, 6, nil)
+	run(t, d, c, 3, func() { d.Covered(map[uint]bool{}) }) // neither counts
+	run(t, d, c, 6, func() { d.Covered(map[uint]bool{1: true, 2: true}) })
+	if got := kinds(t, gdb); len(got) != 1 || got[0] != detect.KindOutage || !d.Outages()[44244] {
+		t.Fatalf("alerts = %v, outage %v", got, d.Outages())
+	}
+}
+
+// TestAFailedPollLosesNoHour: the panel keeps a quarter of an hour for a
+// reader that is late, so a poll that fails and works again a minute later
+// lost nothing and its hour still teaches the normal; a feed broken for
+// longer, or samples the panel says it dropped, do not.
+func TestAFailedPollLosesNoHour(t *testing.T) {
+	cell := model.PathCell{NodeID: 1, Inbound: "in", ClientASN: 44244, Country: "IR", Network: "tcp", SourceKind: "peer"}
+	for name, breakFeed := range map[string]func(d *detect.Detector, c *clock){
+		"a failed poll": func(d *detect.Detector, c *clock) {
+			d.Lost()
+			c.step(time.Minute)
+			d.Covered(nil)
+		},
+		"a long break": func(d *detect.Detector, c *clock) {
+			d.Lost()
+			c.step(20 * time.Minute)
+			d.Covered(nil)
+		},
+		"a gap": func(d *detect.Detector, _ *clock) { d.Gapped(); d.Covered(nil) },
+	} {
+		gdb := openDB(t)
+		gdb.Where("1 = 1").Delete(&detect.Baseline{})
+		gdb.Where("1 = 1").Delete(&model.PathHour{})
+		gdb.Where("1 = 1").Delete(&model.State{})
+		hour := time.Date(2026, 11, 23, 9, 0, 0, 0, time.UTC)
+		c := &clock{hour.Add(10 * time.Minute)}
+		d := &detect.Detector{DB: gdb, Now: c.now}
+		d.Covered(nil)
+		if err := d.Evaluate(t.Context()); err != nil { // the fold's starting point
+			t.Fatal(err)
+		}
+		c.step(20 * time.Minute)
+		breakFeed(d, c)
+		gdb.Create(&model.PathHour{Hour: hour.Unix(), PathCell: cell, PathCounters: model.PathCounters{Accepted: 60, Authed: 50}})
+		c.t = hour.Add(time.Hour + 10*time.Minute)
+		if err := d.Evaluate(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		var n int64
+		gdb.Model(&detect.Baseline{}).Count(&n)
+		if want := name == "a failed poll"; (n > 0) != want {
+			t.Errorf("%s: the hour was learned = %v, want %v", name, n > 0, want)
+		}
+	}
+}
+
+// TestPruneForgetsOnlyWhatIsGone: a path with no stored hour loses its
+// normals and an endpoint with none its probe history — but not while no
+// hour is being stored at all, when everything would look gone.
+func TestPruneForgetsOnlyWhatIsGone(t *testing.T) {
+	gdb := openDB(t)
+	c := &clock{time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)}
+	d := &detect.Detector{DB: gdb, Now: c.now}
+	live := detect.Key{Node: 1, Inbound: "a", ASN: 44244, Network: "tcp"}
+	gone := detect.Key{Node: 9, Inbound: "old", ASN: 44244, Network: "tcp"}
+	normal(gdb, t, live)
+	normal(gdb, t, gone)
+	gdb.Create(&detect.Suspicion{NodeID: 9, Inbound: "old", ProbedAtUnix: 1})
+	gdb.Create(&detect.Suspicion{NodeID: 1, Inbound: "a", ProbedAtUnix: 1})
+	gdb.Create(&detect.Alert{Kind: detect.KindDegraded, At: c.t.Add(-100 * 24 * time.Hour).Unix()})
+	count := func() (baselines, suspicions, alerts int64) {
+		gdb.Model(&detect.Baseline{}).Count(&baselines)
+		gdb.Model(&detect.Suspicion{}).Count(&suspicions)
+		gdb.Model(&detect.Alert{}).Count(&alerts)
+		return
+	}
+	if err := d.Prune(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b, s, a := count(); b != 2 || s != 2 || a != 0 {
+		t.Fatalf("with no hour stored: %d normals, %d endpoints, %d alerts; want everything but the old alert kept", b, s, a)
+	}
+	cell := model.PathCell{NodeID: 1, Inbound: "a", ClientASN: 44244, Country: "IR", Network: "tcp", SourceKind: "peer"}
+	// A day of hours, but not yet a week of them since the feed came back:
+	// still nothing is pruned.
+	gdb.Create(&model.PathHour{Hour: c.t.Add(-time.Hour).Truncate(time.Hour).Unix(), PathCell: cell, PathCounters: model.PathCounters{Accepted: 5}})
+	if err := d.Prune(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b, s, _ := count(); b != 2 || s != 2 {
+		t.Fatalf("within a week of the feed coming back: %d normals, %d endpoints", b, s)
+	}
+	// Six and a half days back is not yet the week.
+	gdb.Create(&model.PathHour{Hour: c.t.Add(-156 * time.Hour).Truncate(time.Hour).Unix(), PathCell: cell, PathCounters: model.PathCounters{Accepted: 5}})
+	if err := d.Prune(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b, s, _ := count(); b != 2 || s != 2 {
+		t.Fatalf("six and a half days after the feed came back: %d normals, %d endpoints", b, s)
+	}
+	gdb.Create(&model.PathHour{Hour: c.t.Add(-7 * 24 * time.Hour).Truncate(time.Hour).Unix(), PathCell: cell, PathCounters: model.PathCounters{Accepted: 5}})
+	if err := d.Prune(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var left []detect.Baseline
+	gdb.Find(&left)
+	if b, s, _ := count(); b != 1 || s != 1 || left[0].NodeID != 1 {
+		t.Fatalf("after: %d normals, %d endpoints, %+v", b, s, left)
+	}
+}
+
+// TestADeletedNodeIsNotCounting: a node the panel no longer lists — deleted
+// after it went off — is not counting; its silence is no drop.
+func TestADeletedNodeIsNotCounting(t *testing.T) {
+	gdb := openDB(t)
+	c := &clock{time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)}
+	d := &detect.Detector{DB: gdb, Now: c.now}
+	keys := []detect.Key{
+		{Node: 1, Inbound: "a", ASN: 44244, Network: "tcp"},
+		{Node: 2, Inbound: "a", ASN: 44244, Network: "tcp"},
+	}
+	for _, k := range keys {
+		normal(gdb, t, k)
+	}
+	both := func() {
+		d.Covered(map[uint]bool{1: true, 2: true})
+		traffic(d, keys[0], 11, 10, 0)
+		traffic(d, keys[1], 11, 10, 0)
+	}
+	run(t, d, c, 6, both)
+	run(t, d, c, 4, func() { d.Covered(map[uint]bool{1: true}); traffic(d, keys[0], 11, 10, 0) }) // off, listed as unknown
+	run(t, d, c, 8, func() { d.Covered(map[uint]bool{1: true}); traffic(d, keys[0], 11, 10, 0) }) // deleted: not listed at all
+	if got := kinds(t, gdb); len(got) != 0 {
+		t.Fatalf("a deleted node raised %v", got)
+	}
+}
+
+// TestAShortRestartBlindsNothing: a stop shorter than the panel keeps loses
+// no sample, so its hours still teach the normals.
+func TestAShortRestartBlindsNothing(t *testing.T) {
+	gdb := openDB(t)
+	hour := time.Date(2026, 11, 23, 9, 0, 0, 0, time.UTC)
+	cell := model.PathCell{NodeID: 1, Inbound: "in", ClientASN: 44244, Country: "IR", Network: "tcp", SourceKind: "peer"}
+	c := &clock{hour.Add(20 * time.Minute)}
+	before := &detect.Detector{DB: gdb, Now: c.now}
+	before.Covered(nil)
+	if err := before.Evaluate(t.Context()); err != nil { // writes when the feed last worked
+		t.Fatal(err)
+	}
+	c.step(4 * time.Minute) // the last poll before the stop, unrecorded
+	c.step(6 * time.Minute) // the stop
+	after := &detect.Detector{DB: gdb, Now: c.now}
+	after.Covered(nil)
+	gdb.Create(&model.PathHour{Hour: hour.Unix(), PathCell: cell, PathCounters: model.PathCounters{Accepted: 60, Authed: 50}})
+	c.t = hour.Add(time.Hour + 10*time.Minute)
+	after.Covered(nil)
+	if err := after.Evaluate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var n int64
+	gdb.Model(&detect.Baseline{}).Count(&n)
+	if n == 0 {
+		t.Fatal("a ten-minute restart kept its hour from the normals")
 	}
 }

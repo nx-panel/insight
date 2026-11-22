@@ -7,6 +7,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/netip"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -178,7 +180,10 @@ func (m *Manager) RefreshASN(ctx context.Context) error {
 func (m *Manager) RefreshCity(ctx context.Context) error {
 	now := m.now().UTC()
 	var lastErr error
-	for _, month := range []time.Time{now, now.AddDate(0, -1, 0)} {
+	// From the first of the month: a month back from the 31st is a day that
+	// does not exist, which normalises forward into this month again.
+	first := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	for _, month := range []time.Time{first, first.AddDate(0, -1, 0)} {
 		url := strings.ReplaceAll(m.Sources.CityURL, "{month}", month.Format("2006-01"))
 		tmp, err := m.download(ctx, url, m.cityPath())
 		if err != nil {
@@ -187,6 +192,7 @@ func (m *Manager) RefreshCity(ctx context.Context) error {
 		}
 		f, err := os.Open(tmp)
 		if err != nil {
+			os.Remove(tmp)
 			return err
 		}
 		t, err := ReadCity(f, m.Sources.RegionCountries)
@@ -196,6 +202,7 @@ func (m *Manager) RefreshCity(ctx context.Context) error {
 			return err
 		}
 		if err := os.Rename(tmp, m.cityPath()); err != nil {
+			os.Remove(tmp)
 			return err
 		}
 		m.DB.SetCity(t)
@@ -209,6 +216,12 @@ func (m *Manager) RefreshCity(ctx context.Context) error {
 
 // download fetches url beside dest (dest + ".part") and returns that path.
 func (m *Manager) download(ctx context.Context, url, dest string) (string, error) {
+	// What these files say decides which network a client is counted under
+	// and which address ranges the panel is told to order links for: they
+	// are taken over TLS or from this machine, nothing else.
+	if u, err := neturl.Parse(url); err != nil || (u.Scheme != "https" && !loopback(u.Hostname())) {
+		return "", errors.New("the download address is not an https one")
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
@@ -216,7 +229,16 @@ func (m *Manager) download(ctx context.Context, url, dest string) (string, error
 	req.Header.Set("User-Agent", "nx-insight")
 	hc := m.HTTP
 	if hc == nil {
-		hc = &http.Client{Timeout: 10 * time.Minute}
+		hc = &http.Client{Timeout: 10 * time.Minute, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// The same rule for wherever it is sent on to.
+			if req.URL.Scheme != "https" && !loopback(req.URL.Hostname()) {
+				return errors.New("redirected off https")
+			}
+			if len(via) >= 10 {
+				return errors.New("too many redirects")
+			}
+			return nil
+		}}
 	}
 	resp, err := hc.Do(req)
 	if err != nil {
@@ -232,6 +254,9 @@ func (m *Manager) download(ctx context.Context, url, dest string) (string, error
 		return "", err
 	}
 	n, err := io.Copy(f, io.LimitReader(resp.Body, maxDownload+1))
+	if err == nil {
+		err = f.Sync() // it is renamed over the good file next
+	}
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
@@ -243,4 +268,14 @@ func (m *Manager) download(ctx context.Context, url, dest string) (string, error
 		return "", err
 	}
 	return tmp, nil
+}
+
+// loopback is whether host is this machine: a mirror the operator runs
+// beside Insight, and the tests' servers.
+func loopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	a, err := netip.ParseAddr(host)
+	return err == nil && a.IsLoopback()
 }

@@ -4,8 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/nx-panel/insight/internal/model"
 	"gorm.io/gorm"
+
+	"github.com/nx-panel/insight/internal/model"
 )
 
 // Retention windows (§4.6), constants first.

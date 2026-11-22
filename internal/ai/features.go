@@ -6,10 +6,12 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+
+	"gorm.io/gorm"
 
 	"github.com/nx-panel/insight/internal/detect"
 	"github.com/nx-panel/insight/internal/model"
-	"gorm.io/gorm"
 )
 
 const (
@@ -82,8 +84,13 @@ func Build(ctx context.Context, gdb *gorm.DB, st State, org func(uint32) string,
 		Select("client_asn, node_id, inbound, network, SUM(accepted) AS accepted, SUM(authed) AS authed, "+
 			"SUM(early_close) AS early_close, SUM(failed_tls + failed_auth + failed_timeout + failed_reset + failed_eof + failed_other) AS failed, "+
 			"SUM(replayed) AS replay, SUM(rtt_sum) AS rtt_sum, SUM(rtt_n) AS rtt_n").
-		Where("hour >= ? AND country = ?", since, country).
-		Group("client_asn, node_id, inbound, network").Order("accepted DESC").Limit(MaxRows).
+		// No ASN 0 (detect.OtherASN): it is whatever had no network of its
+		// own that hour, and a finding about "it" would be about nothing —
+		// and 0 in a finding means "every network". The traffic floor is
+		// applied before the cut to MaxRows, not after it.
+		Where("hour >= ? AND country = ? AND client_asn <> ?", since, country, detect.OtherASN).
+		Group("client_asn, node_id, inbound, network").Having("SUM(accepted) >= ?", minAccepted).
+		Order("accepted DESC").Limit(MaxRows).
 		Scan(&rows).Error; err != nil {
 		return t, err
 	}
@@ -219,11 +226,31 @@ func normal(v int) string {
 	return fmt.Sprint(v)
 }
 
-// clean keeps a name from breaking the table's lines and columns.
+// clean cuts a name down before it goes into the table. The names are
+// other people's text — a network's registered name, an inbound's tag, the
+// provider the admin typed for a node — and the table is a prompt: only
+// letters, digits, spaces, '-' and '_' pass, forty runes of them. That
+// keeps a name from breaking a line or a column and from carrying a URL or
+// a dotted address as written; it does not make it meaningless — a tag
+// that spells a host name or an address in letters and digits still says
+// it, and forty runes are room for a short sentence. What a wrong answer
+// can do is bounded elsewhere: every finding is checked against the
+// numbers (supported).
 func clean(s string) string {
-	s = strings.NewReplacer("|", "/", "\n", " ", "\r", " ").Replace(s)
-	if r := []rune(s); len(r) > 60 {
-		s = string(r[:60])
+	var b strings.Builder
+	n := 0
+	for _, r := range s {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_':
+		case r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == '|' || r == '/' || r == ',':
+			r = ' '
+		default:
+			continue
+		}
+		if n++; n > 40 {
+			break
+		}
+		b.WriteRune(r)
 	}
-	return s
+	return strings.TrimSpace(b.String())
 }

@@ -5,14 +5,14 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
+
+	"gorm.io/gorm"
 
 	"github.com/nx-panel/insight/internal/detect"
 	"github.com/nx-panel/insight/internal/ingest"
 	"github.com/nx-panel/insight/internal/model"
 	"github.com/nx-panel/insight/internal/netinfo"
-	"gorm.io/gorm"
 )
 
 // The admin web's data: the feed's status, the matrix, the nodes and their
@@ -42,39 +42,53 @@ type endpointView struct {
 // handleEndpoints is GET /api/endpoints: every endpoint with probe
 // evidence in the window or a probed episode behind it, the most suspect
 // first.
-func (s *Server) handleEndpoints(w http.ResponseWriter, _ *http.Request, _ model.Admin) {
+func (s *Server) handleEndpoints(w http.ResponseWriter, r *http.Request, _ model.Admin) {
 	var rows []detect.Suspicion
-	if err := s.db.Order("score DESC, node_id, inbound").Find(&rows).Error; err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+	if err := s.db.WithContext(r.Context()).Order("score DESC, node_id, inbound").Limit(endpointRows).Find(&rows).Error; err != nil {
+		serverError(w, err)
+		return
+	}
+	// The newest probed alert of every endpoint and whether a path alert
+	// followed it, in two queries however many endpoints there are.
+	var probed []detect.Alert
+	if err := s.db.WithContext(r.Context()).Where("kind = ?", detect.KindProbed).Order("id DESC").Limit(endpointAlerts).Find(&probed).Error; err != nil {
+		serverError(w, err)
+		return
+	}
+	last := map[detect.Endpoint]detect.Alert{}
+	var newest []detect.Alert
+	for _, a := range probed {
+		e := detect.Endpoint{Node: a.NodeID, Inbound: a.Inbound}
+		if _, ok := last[e]; !ok {
+			last[e] = a
+			newest = append(newest, a)
+		}
+	}
+	followed, err := detect.Followed(s.db.WithContext(r.Context()), newest)
+	if err != nil {
+		serverError(w, err)
 		return
 	}
 	out := make([]endpointView, 0, len(rows))
 	now := time.Now().Unix()
-	for _, r := range rows {
-		v := endpointView{Suspicion: r}
-		if r.ProbedAtUnix != 0 {
-			var last []detect.Alert
-			if err := s.db.Where("kind = ? AND node_id = ? AND inbound = ?", detect.KindProbed, r.NodeID, r.Inbound).
-				Order("id DESC").Limit(1).Find(&last).Error; err != nil {
-				writeErr(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			followed, err := detect.Followed(s.db, last)
-			if err != nil {
-				writeErr(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			if len(last) == 1 {
-				f := followed[last[0].ID]
-				if f || now-last[0].At > int64(detect.CalibrateWithin/time.Second) {
-					v.Followed = &f
-				}
+	for _, row := range rows {
+		v := endpointView{Suspicion: row}
+		if a, ok := last[detect.Endpoint{Node: row.NodeID, Inbound: row.Inbound}]; ok && row.ProbedAtUnix != 0 {
+			f := followed[a.ID]
+			if f || now-a.At > int64(detect.CalibrateWithin/time.Second) {
+				v.Followed = &f
 			}
 		}
 		out = append(out, v)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
+
+// endpointRows and endpointAlerts bound what the probing page reads.
+const (
+	endpointRows   = 500
+	endpointAlerts = 2000
+)
 
 type statusView struct {
 	Version     string        `json:"version"`
@@ -91,7 +105,7 @@ type statusView struct {
 	Probed int64 `json:"probed"`
 }
 
-func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request, _ model.Admin) {
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, _ model.Admin) {
 	v := statusView{Version: s.version, Attribution: netinfo.Attribution, Outages: []uint32{}}
 	if c := s.addon.Credentials(); c != nil {
 		v.Registered, v.Panel = true, c.Panel.URL
@@ -111,8 +125,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request, _ model.Ad
 		sort.Slice(v.Outages, func(i, j int) bool { return v.Outages[i] < v.Outages[j] })
 		v.Degraded = len(s.detect.Degraded())
 	}
-	if err := s.db.Model(&detect.Suspicion{}).Where("probed = ?", true).Count(&v.Probed).Error; err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+	if err := s.db.WithContext(r.Context()).Model(&detect.Suspicion{}).Where("probed = ?", true).Count(&v.Probed).Error; err != nil {
+		serverError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, v)
@@ -145,6 +159,8 @@ type cellView struct {
 	Failed     uint64  `json:"failed"`
 	EarlyClose uint64  `json:"earlyClose"`
 	RTTMs      float64 `json:"rttMs"`
+	// RTTN is how many samples RTTMs averages, for whoever merges cells.
+	RTTN       uint64  `json:"rttN"`
 	RetransPPM float64 `json:"retransPpm"`
 	Up         int64   `json:"up"`
 	Down       int64   `json:"down"`
@@ -170,6 +186,14 @@ type matrixRow struct {
 	Down       int64
 }
 
+// matrixCells bounds the answer to the busiest cells: the page shows the top
+// networks, and a week by region on a large fleet is otherwise tens of
+// megabytes every refresh.
+const (
+	matrixCells    = 5000
+	matrixDegraded = 300
+)
+
 // handleMatrix is GET /api/matrix?hours=&by=asn|region: the last hours of
 // every client network × node × inbound, from the hourly cells.
 func (s *Server) handleMatrix(w http.ResponseWriter, r *http.Request, _ model.Admin) {
@@ -189,13 +213,46 @@ func (s *Server) handleMatrix(w http.ResponseWriter, r *http.Request, _ model.Ad
 		"SUM(retrans_sum) AS retrans_sum, SUM(retrans_n) AS retrans_n, SUM(up) AS up, SUM(down) AS down"
 	since := time.Now().Add(-time.Duration(hours) * time.Hour).Truncate(time.Hour).Unix()
 	var rows []matrixRow
-	if err := s.db.Model(&model.PathHour{}).Select(sel).Where("hour >= ?", since).Group(group).Scan(&rows).Error; err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+	if err := s.db.WithContext(r.Context()).Model(&model.PathHour{}).Select(sel).Where("hour >= ?", since).Group(group).
+		Order("SUM(accepted) DESC").Limit(matrixCells).Scan(&rows).Error; err != nil {
+		serverError(w, err)
 		return
 	}
 	degraded := map[detect.Key]bool{}
 	if s.detect != nil {
 		degraded = s.detect.Degraded()
+	}
+	// The cap keeps the busiest cells, and a path that is down is the
+	// quietest there is: the degraded ones the cap cut are read by key and
+	// put back, a bounded number of them.
+	if len(rows) == matrixCells && len(degraded) > 0 {
+		have := map[detect.Key]bool{}
+		for _, row := range rows {
+			have[detect.Key{Node: row.NodeID, Inbound: row.Inbound, ASN: row.ClientASN, Network: row.Network}] = true
+		}
+		q := s.db.WithContext(r.Context()).Model(&model.PathHour{}).Select(sel).Where("hour >= ?", since)
+		var or *gorm.DB
+		missing := 0
+		for k := range degraded {
+			if have[k] || missing == matrixDegraded {
+				continue
+			}
+			cond := s.db.Where("node_id = ? AND inbound = ? AND client_asn = ? AND network = ?", k.Node, k.Inbound, k.ASN, k.Network)
+			if missing == 0 {
+				or = cond
+			} else {
+				or = or.Or(cond)
+			}
+			missing++
+		}
+		if missing > 0 {
+			var more []matrixRow
+			if err := q.Where(or).Group(group).Scan(&more).Error; err != nil {
+				serverError(w, err)
+				return
+			}
+			rows = append(rows, more...)
+		}
 	}
 	cells := make([]cellView, 0, len(rows))
 	for _, r := range rows {
@@ -208,7 +265,7 @@ func (s *Server) handleMatrix(w http.ResponseWriter, r *http.Request, _ model.Ad
 			c.Org = s.net.Org(r.ClientASN)
 		}
 		if r.RTTN > 0 {
-			c.RTTMs = float64(r.RTTSum) / float64(r.RTTN)
+			c.RTTMs, c.RTTN = float64(r.RTTSum)/float64(r.RTTN), r.RTTN
 		}
 		if r.RetransN > 0 {
 			c.RetransPPM = float64(r.RetransSum) / float64(r.RetransN)
@@ -216,8 +273,8 @@ func (s *Server) handleMatrix(w http.ResponseWriter, r *http.Request, _ model.Ad
 		cells = append(cells, c)
 	}
 	var nodes []model.NodeNetinfo
-	if err := s.db.Order("node_id").Find(&nodes).Error; err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+	if err := s.db.WithContext(r.Context()).Order("node_id").Find(&nodes).Error; err != nil {
+		serverError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"hours": hours, "cells": cells, "nodes": nodeViews(nodes)})
@@ -243,10 +300,10 @@ func nodeViews(nodes []model.NodeNetinfo) []nodeView {
 	return out
 }
 
-func (s *Server) handleNodes(w http.ResponseWriter, _ *http.Request, _ model.Admin) {
+func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request, _ model.Admin) {
 	var nodes []model.NodeNetinfo
-	if err := s.db.Order("node_id").Find(&nodes).Error; err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+	if err := s.db.WithContext(r.Context()).Order("node_id").Find(&nodes).Error; err != nil {
+		serverError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, nodeViews(nodes))
@@ -270,16 +327,21 @@ func (s *Server) handleOverride(w http.ResponseWriter, r *http.Request, _ model.
 		badBody(w)
 		return
 	}
-	switch err := ingest.Override(s.db, uint(id), req.ASN, req.Org, req.Country, req.City); {
+	switch err := ingest.Override(s.db.WithContext(r.Context()), uint(id), req.ASN, req.Org, req.Country, req.City); {
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		writeCode(w, http.StatusNotFound, "not_found", "no such node")
-	case err != nil && strings.Contains(err.Error(), "country"):
+	case errors.Is(err, ingest.ErrCountry):
 		writeCode(w, http.StatusBadRequest, "bad_country", err.Error())
+	case errors.Is(err, ingest.ErrOverride):
+		writeCode(w, http.StatusBadRequest, "bad_override", err.Error(), "max", strconv.Itoa(ingest.OverrideMax))
 	case err != nil:
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		serverError(w, err)
 	default:
 		var n model.NodeNetinfo
-		s.db.First(&n, id)
+		if err := s.db.WithContext(r.Context()).First(&n, id).Error; err != nil {
+			serverError(w, err)
+			return
+		}
 		writeJSON(w, http.StatusOK, nodeViews([]model.NodeNetinfo{n})[0])
 	}
 }
@@ -295,7 +357,7 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request, _ model.Ad
 		}
 		limit = n
 	}
-	q := s.db.Order("id DESC").Limit(limit)
+	q := s.db.WithContext(r.Context()).Order("id DESC").Limit(limit)
 	if v := r.URL.Query().Get("before"); v != "" {
 		n, err := strconv.ParseUint(v, 10, 64)
 		if err != nil {
@@ -306,7 +368,7 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request, _ model.Ad
 	}
 	alerts := []detect.Alert{}
 	if err := q.Find(&alerts).Error; err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		serverError(w, err)
 		return
 	}
 	type alertView struct {
@@ -353,7 +415,7 @@ const (
 // for that client network instead. The subscription hints already put them
 // first; this is what the admin can do about the rest — move the users,
 // change the node's address or the inbound's port or SNI.
-func (s *Server) handleSuggestions(w http.ResponseWriter, _ *http.Request, _ model.Admin) {
+func (s *Server) handleSuggestions(w http.ResponseWriter, r *http.Request, _ model.Admin) {
 	out := []suggestion{}
 	if s.detect == nil {
 		writeJSON(w, http.StatusOK, out)
@@ -367,10 +429,10 @@ func (s *Server) handleSuggestions(w http.ResponseWriter, _ *http.Request, _ mod
 	}
 	since := time.Now().Add(-suggestWindow).Truncate(time.Hour).Unix()
 	var rows []matrixRow
-	if err := s.db.Model(&model.PathHour{}).
+	if err := s.db.WithContext(r.Context()).Model(&model.PathHour{}).
 		Select("client_asn, node_id, inbound, network, SUM(accepted) AS accepted, SUM(authed) AS authed").
-		Where("hour >= ? AND client_asn <> 0", since).Group("client_asn, node_id, inbound, network").Scan(&rows).Error; err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		Where("hour >= ? AND client_asn <> ?", since, model.OtherASN).Group("client_asn, node_id, inbound, network").Scan(&rows).Error; err != nil {
+		serverError(w, err)
 		return
 	}
 	byASN := map[uint32][]alternative{}

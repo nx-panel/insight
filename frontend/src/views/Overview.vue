@@ -76,7 +76,7 @@ interface Row {
   label: string
   sub: string
   total: number
-  cells: Map<string, Cell & { n: number }>
+  cells: Map<string, Cell>
 }
 
 const cells = computed(() =>
@@ -120,11 +120,14 @@ const rows = computed<Row[]>(() => {
       have.authed += c.authed
       have.failed += c.failed
       have.earlyClose += c.earlyClose
-      have.rttMs = (have.rttMs * have.n + c.rttMs) / (have.n + 1)
-      have.n++
+      // Weighted by its samples: a UDP side with none must not halve the
+      // TCP side's round trip.
+      const n = have.rttN + c.rttN
+      have.rttMs = n > 0 ? (have.rttMs * have.rttN + c.rttMs * c.rttN) / n : 0
+      have.rttN = n
       have.degraded = have.degraded || c.degraded
     } else {
-      row.cells.set(col, { ...c, n: 1 })
+      row.cells.set(col, { ...c })
     }
   }
   return [...out.values()].toSorted((a, b) => b.total - a.total)

@@ -14,12 +14,13 @@ import (
 	"testing"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/nx-panel/insight/internal/ai"
 	"github.com/nx-panel/insight/internal/config"
 	"github.com/nx-panel/insight/internal/db"
 	"github.com/nx-panel/insight/internal/detect"
 	"github.com/nx-panel/insight/internal/model"
-	"gorm.io/gorm"
 )
 
 // openDB is a fresh SQLite database, or the PostgreSQL one
@@ -284,7 +285,8 @@ func TestTheBudgetAndTheBreakerHoldCalls(t *testing.T) {
 			budget++
 		}
 	}
-	if len(p.bodies) != before || budget != 1 {
+	// No call goes out, and each pass the admin asked for says why.
+	if len(p.bodies) != before || budget != 2 {
 		t.Fatalf("past the budget: %d new calls, %d budget reports", len(p.bodies)-before, budget)
 	}
 }
@@ -388,5 +390,113 @@ func TestAProviderWithoutMaxTokensIsAskedAgain(t *testing.T) {
 	}
 	if len(bodies) != 3 || !strings.Contains(bodies[2], `"max_completion_tokens":3000`) {
 		t.Fatalf("%d requests: %v", len(bodies), bodies)
+	}
+}
+
+// TestNothingIsRotatedForANetworkThatIsCutOff: with a network in an outage
+// its dead paths are no block of the operator's — no node_blocked,
+// inbound_blocked, rotate or move for it is kept (P20); and node_blocked
+// needs another node that works for the network.
+func TestNothingIsRotatedForANetworkThatIsCutOff(t *testing.T) {
+	tbl := ai.Table{
+		Nodes:   []ai.HostNode{{ID: 1}, {ID: 2}},
+		Outages: []uint32{44244},
+		Paths: []ai.Path{
+			{ASN: 44244, Node: 1, Inbound: "vless", Success: 2, Degraded: true},
+			{ASN: 44244, Node: 2, Inbound: "vless", Success: 1, Degraded: true},
+			{ASN: 58224, Node: 1, Inbound: "vless", Success: 95},
+			{ASN: 58224, Node: 2, Inbound: "vless", Success: 30},
+			{ASN: 58224, Node: 2, Inbound: "vless", Network: "udp", Success: 96},
+		},
+	}
+	f := func(code string, asn uint32, node uint, inbound string, to uint, toIn string) string {
+		raw, _ := json.Marshal(ai.Finding{Code: code, Severity: "warn", ASN: asn, Node: node, Inbound: inbound, ToNode: to, ToInbound: toIn})
+		return string(raw)
+	}
+	answer := `{"findings":[` + strings.Join([]string{
+		f(ai.CodeNodeBlocked, 44244, 1, "", 0, ""),         // an outage: dropped
+		f(ai.CodeInboundBlocked, 44244, 1, "vless", 0, ""), // dropped
+		f(ai.CodeRotateAddress, 0, 1, "", 0, ""),           // dropped
+		f(ai.CodeRotateEndpoint, 0, 1, "vless", 0, ""),     // dropped
+		f(ai.CodeASNOutage, 44244, 0, "", 0, ""),           // kept
+		f(ai.CodeInboundBlocked, 58224, 2, "vless", 0, ""), // its tcp side is blocked: kept
+		f(ai.CodeMoveUsers, 58224, 1, "vless", 2, "vless"), // node 1 works; and node 2's tcp does not: dropped
+		f(ai.CodeProtoBlocked, 58224, 0, "vless", 0, ""),   // works on node 1: dropped
+	}, ",") + `]}`
+	got, dropped, err := ai.Parse(answer, tbl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	codes := []string{}
+	for _, g := range got {
+		codes = append(codes, g.Code)
+	}
+	if strings.Join(codes, ",") != "asn_outage,inbound_blocked" || dropped != 6 {
+		t.Fatalf("kept %v, dropped %d", codes, dropped)
+	}
+}
+
+// TestASavedKeyStaysWithItsProvider: the saved key is kept for the same API
+// host and proxy only, and a proxy's password is never shown.
+func TestASavedKeyStaysWithItsProvider(t *testing.T) {
+	old := ai.Settings{URL: "https://api.example.com/v1", Proxy: "socks5://u:secret@127.0.0.1:1080"}
+	for url, same := range map[string]bool{
+		"https://api.example.com/v1":  true,
+		"https://API.example.com/v2/": true,
+		"http://api.example.com/v1":   false,
+		"https://evil.example.net/v1": false,
+	} {
+		if got := (ai.Settings{URL: url, Proxy: old.Proxy}).SameProvider(old); got != same {
+			t.Errorf("%s: same provider = %v, want %v", url, got, same)
+		}
+	}
+	if (ai.Settings{URL: old.URL, Proxy: "socks5://attacker.example:1080"}).SameProvider(old) {
+		t.Error("another proxy read as the same provider")
+	}
+	masked := ai.MaskProxy(old.Proxy)
+	if masked != "socks5://u:********@127.0.0.1:1080" {
+		t.Fatalf("masked = %s", masked)
+	}
+	// A password a URL library writes differently is still the same proxy:
+	// saving the form unchanged must not drop the key.
+	for _, proxy := range []string{"http://user:p!ss(1)*@proxy.example:8080", "HTTP://user:pw@proxy.example:8080"} {
+		saved := ai.Settings{URL: old.URL, Proxy: proxy}
+		back := ai.Settings{URL: old.URL, Proxy: ai.UnmaskProxy(ai.MaskProxy(proxy), proxy)}
+		if !back.SameProvider(saved) || back.Proxy != proxy {
+			t.Errorf("%s: came back as %s, same provider %v", proxy, back.Proxy, back.SameProvider(saved))
+		}
+	}
+	if got := ai.UnmaskProxy("http://u:********@127.0.0.1:1080", old.Proxy); strings.Contains(got, "secret") {
+		t.Fatalf("the password followed the proxy to another scheme: %s", got)
+	}
+	if got := ai.UnmaskProxy(masked, old.Proxy); got != old.Proxy {
+		t.Fatalf("unmasked = %s", got)
+	}
+	if got := ai.UnmaskProxy(strings.Replace(masked, "127.0.0.1", "203.0.113.5", 1), old.Proxy); strings.Contains(got, "secret") {
+		t.Fatalf("the password followed the proxy to another host: %s", got)
+	}
+	for _, bad := range []string{"https://api.example.com/v1?x=", "https://api.example.com/v1?", "https://api.example.com/v1#", "https://u:p@api.example.com/v1"} {
+		s := ai.Settings{URL: bad}
+		if err := s.Validate(); !errors.Is(err, ai.ErrURL) {
+			t.Errorf("%s: %v", bad, err)
+		}
+	}
+}
+
+// TestTagsOfNoLettersDoNotSilenceTheAnalysis: two tags that clean to
+// nothing (flags, symbols) are not an ambiguous spelling of the empty tag
+// every inbound-less finding carries.
+func TestTagsOfNoLettersDoNotSilenceTheAnalysis(t *testing.T) {
+	tbl := ai.Table{
+		Nodes:   []ai.HostNode{{ID: 1}, {ID: 2}},
+		Outages: []uint32{44244},
+		Paths: []ai.Path{
+			{ASN: 44244, Node: 1, Inbound: "🇩🇪", Success: 2, Degraded: true},
+			{ASN: 44244, Node: 2, Inbound: "🇳🇱", Success: 1, Degraded: true},
+		},
+	}
+	got, dropped, err := ai.Parse(`{"findings":[{"code":"asn_outage","severity":"critical","asn":44244,"node":0,"inbound":"","to_node":0,"to_inbound":"","confidence":0.9}]}`, tbl)
+	if err != nil || len(got) != 1 || dropped != 0 {
+		t.Fatalf("kept %+v, dropped %d, %v", got, dropped, err)
 	}
 }

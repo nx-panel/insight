@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nx-panel/addon-kit/telegram"
+
 	"github.com/nx-panel/insight/internal/detect"
 )
 

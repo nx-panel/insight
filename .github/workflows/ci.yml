@@ -29,7 +29,19 @@ jobs:
         run: go test -race -count=1 -p 1 ./...
       - name: the manifest is one a panel accepts
         run: go run github.com/nx-panel/addon-kit/cmd/nx-addon check nx-addon.json
-      - run: sh -n install.sh && sh -n scripts/sign.sh && sh -n scripts/sign-sums.sh
+      - run: sh -n install.sh && sh -n scripts/sign.sh && sh -n scripts/sign-sums.sh && sh -n walk/two-asn/run.sh
+  golangci:
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
   web:
     runs-on: ubicloud-standard-2
     defaults:

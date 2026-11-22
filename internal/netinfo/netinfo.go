@@ -155,6 +155,9 @@ func ReadASN(r io.Reader) (*asnTable, error) {
 		if cc == "NONE" {
 			cc = ""
 		}
+		if len(rows) == maxASNRows {
+			return nil, fmt.Errorf("asn: more than %d ranges", maxASNRows)
+		}
 		rows = append(rows, row{span{start.As16(), end.As16()}, uint32(asn), cc})
 		if _, ok := t.orgs[uint32(asn)]; !ok {
 			t.orgs[uint32(asn)] = f[4]
@@ -247,7 +250,9 @@ func ReadCity(r io.Reader, countries []string) (*geoTable, error) {
 		intern[s] = s
 		return s
 	}
+	total := 0
 	err := readCityRows(r, func(row cityRow) bool {
+		total++
 		if slices.Contains(countries, row.g.country) {
 			t.spans = append(t.spans, row.s)
 			t.geos = append(t.geos, geo{in(row.g.country), in(row.g.region), in(row.g.city)})
@@ -256,6 +261,12 @@ func ReadCity(r io.Reader, countries []string) (*geoTable, error) {
 	})
 	if err != nil {
 		return nil, err
+	}
+	// A file with no row at all is not City Lite (an error page saved with
+	// status 200, another format): swapped in, every region would vanish
+	// until the next refresh.
+	if total == 0 {
+		return nil, errors.New("city: no ranges")
 	}
 	idx := make([]int, len(t.spans))
 	for i := range idx {
@@ -301,7 +312,13 @@ func maybeGunzip(r io.Reader) (io.Reader, error) {
 	br := bufio.NewReader(r)
 	magic, err := br.Peek(2)
 	if err == nil && magic[0] == 0x1f && magic[1] == 0x8b {
-		return gzip.NewReader(br)
+		zr, err := gzip.NewReader(br)
+		if err != nil {
+			return nil, err
+		}
+		// The download is capped compressed; this caps what it unpacks to,
+		// so a small file that inflates without end stops being read.
+		return &capped{r: zr, left: maxUnpacked}, nil
 	}
 	return br, nil
 }
@@ -374,4 +391,29 @@ func lastAddr(p netip.Prefix) netip.Addr {
 		return netip.AddrFrom16(a).Unmap()
 	}
 	return netip.AddrFrom16(a)
+}
+
+// maxUnpacked is the most a gzipped file may unpack to (City Lite is under
+// a gigabyte); maxASNRows the most ranges the ASN table takes (iptoasn has
+// under a million).
+const (
+	maxUnpacked = 4 << 30
+	maxASNRows  = 5_000_000
+)
+
+type capped struct {
+	r    io.Reader
+	left int64
+}
+
+func (c *capped) Read(p []byte) (int, error) {
+	if c.left <= 0 {
+		return 0, errors.New("the file unpacks to more than the limit")
+	}
+	if int64(len(p)) > c.left {
+		p = p[:c.left]
+	}
+	n, err := c.r.Read(p)
+	c.left -= int64(n)
+	return n, err
 }

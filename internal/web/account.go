@@ -2,6 +2,7 @@ package web
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/nx-panel/addon-kit/auth"
 	"github.com/nx-panel/addon-kit/web"
+
 	"github.com/nx-panel/insight/internal/admins"
 	"github.com/nx-panel/insight/internal/model"
 )
@@ -122,7 +124,7 @@ func (s *Server) handleLoginMFA(w http.ResponseWriter, r *http.Request) {
 	// it and the other is refused.
 	res := s.db.Model(&model.Admin{}).Where("id = ? AND totp_last_used < ?", a.ID, step).Update("totp_last_used", step)
 	if res.Error != nil {
-		writeErr(w, http.StatusInternalServerError, "could not record the code: "+res.Error.Error())
+		serverError(w, fmt.Errorf("could not record the code: %w", res.Error))
 		return
 	}
 	if res.RowsAffected == 0 {
@@ -156,7 +158,7 @@ func secure(r *http.Request) bool {
 func (s *Server) startSession(w http.ResponseWriter, r *http.Request, a model.Admin) {
 	tok, err := admins.Start(s.db, a.ID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not start the session")
+		serverError(w, fmt.Errorf("could not start the session: %w", err))
 		return
 	}
 	a.LastLoginAt = time.Now().Unix()
@@ -173,7 +175,7 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, a model.Ad
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if c, _ := r.Cookie(sessionCookie); c != nil {
 		if err := admins.End(s.db, c.Value); err != nil {
-			writeErr(w, http.StatusInternalServerError, "could not end the session: "+err.Error())
+			serverError(w, fmt.Errorf("could not end the session: %w", err))
 			return
 		}
 	}
@@ -193,7 +195,9 @@ func passwordErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, auth.ErrLongPassword):
 		writeCode(w, http.StatusBadRequest, "password_long", err.Error())
 	default:
-		writeErr(w, http.StatusBadRequest, err.Error())
+		// Nothing else a password can be refused for: bcrypt failing is the
+		// server's fault.
+		serverError(w, fmt.Errorf("hashing the password: %w", err))
 	}
 }
 
@@ -217,12 +221,17 @@ func (s *Server) handlePassword(w http.ResponseWriter, r *http.Request, a model.
 		return
 	}
 	if err := s.db.Model(&a).Update("password_hash", hash).Error; err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not save the password: "+err.Error())
+		serverError(w, fmt.Errorf("could not save the password: %w", err))
 		return
 	}
 	c, _ := r.Cookie(sessionCookie)
 	if err := admins.EndOthers(s.db, a.ID, c.Value); err != nil {
-		writeErr(w, http.StatusInternalServerError, "the password is changed, but the other sessions could not be ended: "+err.Error())
+		// The password did change: saying "something went wrong" would send
+		// the admin back to try the old one. What did not happen is said
+		// as such — the other sessions, possibly the reason for the change,
+		// are still signed in.
+		log.Printf("web: ending the other sessions after a password change: %v", err)
+		writeCode(w, http.StatusInternalServerError, "sessions_not_ended", "the password is changed, but the other sessions could not be ended")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -237,7 +246,7 @@ func (s *Server) handleTOTPEnrol(w http.ResponseWriter, _ *http.Request, a model
 	}
 	secret, err := auth.NewTOTPSecret()
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not draw a secret")
+		serverError(w, fmt.Errorf("could not draw a secret: %w", err))
 		return
 	}
 	s.mu.Lock()
@@ -267,7 +276,7 @@ func (s *Server) handleTOTPConfirm(w http.ResponseWriter, r *http.Request, a mod
 		return
 	}
 	if err := s.db.Model(&a).Updates(map[string]any{"totp_secret": secret, "totp_last_used": step}).Error; err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not turn two-factor sign-in on: "+err.Error())
+		serverError(w, fmt.Errorf("could not turn two-factor sign-in on: %w", err))
 		return
 	}
 	s.mu.Lock()
@@ -290,7 +299,7 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request, a mod
 		return
 	}
 	if err := s.db.Model(&a).Updates(map[string]any{"totp_secret": "", "totp_last_used": 0}).Error; err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not turn two-factor sign-in off: "+err.Error())
+		serverError(w, fmt.Errorf("could not turn two-factor sign-in off: %w", err))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

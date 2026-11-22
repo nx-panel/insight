@@ -173,8 +173,10 @@ check() {
 	TOK="$(tok)"
 	say "alerts"
 	iget /api/alerts | jq -r '.[] | "\(.kind) AS\(.asn) node\(.nodeId) \(.inbound) \(.reason)"'
-	say "the panel's order hints"
-	api GET /api/subscriptions/order-hints | jq -c '.groups[]? | {cidrs, nodes: .order.nodes}'
+	# The hints themselves have no read route on the panel; what they do is
+	# in the subscriptions below, and Insight logs each push.
+	say "Insight's hint pushes"
+	dc logs --no-log-prefix insight 2>/dev/null | grep 'hints: pushed' | tail -3
 	sub="$(api GET /api/users | jq -r '.[] | select(.name=="walker") | .subId')"
 	for isp in a b; do
 		say "the subscription as ISP $isp fetches it (first link first)"

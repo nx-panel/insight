@@ -17,6 +17,8 @@ import (
 	"github.com/nx-panel/addon-kit/addon"
 	"github.com/nx-panel/addon-kit/auth"
 	"github.com/nx-panel/addon-kit/web"
+	"gorm.io/gorm"
+
 	"github.com/nx-panel/insight/internal/admins"
 	"github.com/nx-panel/insight/internal/ai"
 	"github.com/nx-panel/insight/internal/config"
@@ -24,7 +26,6 @@ import (
 	"github.com/nx-panel/insight/internal/ingest"
 	"github.com/nx-panel/insight/internal/model"
 	"github.com/nx-panel/insight/internal/netinfo"
-	"gorm.io/gorm"
 )
 
 const sessionCookie = "nx_insight_session"
@@ -165,8 +166,12 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func writeErr(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]any{"error": msg})
+// serverError answers 500 without the error's text, which is the database
+// driver's or the kernel's and no business of whoever is asking — some of
+// these routes answer before anyone has signed in. The log has it.
+func serverError(w http.ResponseWriter, err error) {
+	log.Printf("web: %v", err)
+	writeCode(w, http.StatusInternalServerError, "internal", "internal error")
 }
 
 // writeCode is an error with a code the admin web translates

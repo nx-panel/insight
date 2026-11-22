@@ -26,7 +26,10 @@ const (
 
 // The network-information sources (nx-panel docs/path-telemetry.md P5, P17):
 // each install downloads them itself, from where their publishers put them.
-// The two options exist so a mirror can be named later without a release.
+// NX_OPT_ASN_URL and NX_OPT_CITY_URL name a mirror on an install whose
+// environment the operator edits by hand; they are not questions of the
+// install (not in nx-addon.json), and a mirror must be https or on this
+// machine (netinfo.Manager.download).
 const (
 	// DefaultASNURL is iptoasn.com's combined IPv4+IPv6 ranges, refreshed
 	// hourly by its publisher.

@@ -47,7 +47,7 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/nx-panel/nx-panel
+        - github.com/nx-panel/insight
   exclusions:
     paths:
       - frontend

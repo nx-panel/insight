@@ -17,14 +17,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"sort"
 	"sync"
 	"time"
 
-	"github.com/nx-panel/insight/internal/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+
+	"github.com/nx-panel/insight/internal/model"
 )
 
 // Tunables, constants first (decision 7 spirit).
@@ -44,6 +46,12 @@ const (
 	// hour) or in the window (accepted).
 	minNormal = 20.0
 	minWindow = 10
+	// A drop is judged only where the normal expects this many authenticated
+	// sessions in the window: at five expected, a quiet quarter of an hour
+	// with one or none happens by chance about once in twenty-five
+	// (Poisson), which is several false alerts a day per quiet path; at
+	// twelve, three or fewer is one in four hundred.
+	minExpected = 12.0
 	// zBad is the z-score past which a window is bad; the ratio floors keep a
 	// quiet path's noise from reading as a block.
 	zBad         = 3.0
@@ -52,10 +60,29 @@ const (
 	dropFraction = 0.3
 	// confirm is how many evaluations in a row move a state.
 	confirm = 2
-	// maxWindowKeys bounds the window: past it, paths with no normal are
-	// not kept.
+	// maxWindowKeys bounds one bucket of the window. A bucket that filled
+	// says nothing about the paths it has no row for, so while one is in
+	// the window a path with no traffic in it is not judged a drop.
 	maxWindowKeys = 20000
+	// alertsKept is how long an alert is kept.
+	alertsKept = 90 * 24 * time.Hour
+	// panelKeeps is how long the panel holds samples for a reader that is
+	// late (its ring): a feed broken for less than this lost nothing.
+	panelKeeps = 15 * time.Minute
+	// relearnAfter is how long a path's normal stays frozen while it is
+	// degraded. A block is not the path's normal; but a path whose traffic
+	// changed for good — its users moved off it, a network that shrank —
+	// would otherwise read degraded for ever, with nothing to acknowledge it
+	// by. After this the normal learns again and the path recovers by the
+	// numbers it now has: a week and some hours later on the recent normal,
+	// about two weeks for a path judged by its hour-of-week slots, which
+	// learn one week at a time. A block that lasts that long is, by then,
+	// what the path is; so is an ASN outage that long, which ends then too.
+	relearnAfter = 7 * 24 * time.Hour
 )
+
+// OtherASN is model.OtherASN: never observed, folded or judged here.
+const OtherASN = model.OtherASN
 
 // Alert kinds.
 const (
@@ -100,7 +127,7 @@ type Baseline struct {
 	Inbound string `gorm:"primaryKey;size:128"`
 	ASN     uint32 `gorm:"primaryKey;column:asn;autoIncrement:false"`
 	Network string `gorm:"primaryKey;size:4"`
-	Slot    int    `gorm:"primaryKey;autoIncrement:false"`
+	Slot    int    `gorm:"primaryKey;autoIncrement:false;index"`
 	N       int
 	// Authed is per hour; Fail and Early are ratios.
 	MeanAuthed, VarAuthed float64
@@ -110,8 +137,23 @@ type Baseline struct {
 
 func (Baseline) TableName() string { return "path_baselines" }
 
+// PathState is one degraded path, kept so a restart neither alerts again
+// for a path still down nor forgets to say that one came back. A row with
+// Network "" and NodeID 0 is an ASN in an outage.
+type PathState struct {
+	NodeID  uint   `gorm:"primaryKey;autoIncrement:false"`
+	Inbound string `gorm:"primaryKey;size:128"`
+	ASN     uint32 `gorm:"primaryKey;column:asn;autoIncrement:false"`
+	Network string `gorm:"primaryKey;size:4"`
+	Alerted bool
+	Reason  string
+	Since   int64
+}
+
+func (PathState) TableName() string { return "path_states" }
+
 // Tables are this package's, for the migration.
-func Tables() []any { return []any{&Alert{}, &Baseline{}, &Suspicion{}} }
+func Tables() []any { return []any{&Alert{}, &Baseline{}, &Suspicion{}, &PathState{}} }
 
 type pathState struct {
 	degraded bool
@@ -121,6 +163,11 @@ type pathState struct {
 	bad     int
 	good    int
 	reason  string
+	since   int64
+	// lastBad is when it last read bad or was degraded: an hour that holds
+	// it is not folded into the normal, or a block would become the normal
+	// and "recover" by itself after a couple of hours.
+	lastBad time.Time
 }
 
 // Detector holds the window and the states.
@@ -129,15 +176,40 @@ type Detector struct {
 	// Send delivers an alert (Telegram); nil stores only.
 	Send func(context.Context, Alert)
 	Now  func() time.Time
-	// Started is when Insight began watching: the window covers no more
-	// than the time since. Zero is the first Observe or Evaluate.
+	// Started is since when the window has been fed without a break: the
+	// first poll that worked after the start, or after a poll that did not
+	// or a gap in the panel's buffer (Covered, Lost, Gapped). The window covers no more than the time since, and
+	// while it is zero nothing is judged: no data is not no traffic.
 	Started time.Time
 
-	mu      sync.Mutex
-	buckets [Buckets]map[Key]*model.PathCounters
-	start   time.Time // the newest bucket's start
-	states  map[Key]*pathState
-	outages map[uint32]bool
+	mu sync.Mutex
+	// loaded is whether states and outages were read from the database;
+	// seenLoaded whether the last run's stop was accounted for (once).
+	loaded     bool
+	seenLoaded bool
+	// saved is what the database holds of them.
+	saved map[Key]PathState
+	// overflowed is when a bucket last filled (maxWindowKeys).
+	overflowed time.Time
+	// blind are the hours samples were lost in: they teach the normals
+	// nothing. lostSince is when the feed broke, zero while it runs.
+	blind     map[int64]bool
+	lostSince time.Time
+	// lastFed is when a poll last worked. counting are the nodes the panel
+	// listed as counting at it, nil when not known; onAll, per hour, the
+	// nodes that counted at every poll of it; backAt when a node last came
+	// back, until the window covers it again (Covered). onAll is not
+	// stored: across a restart the hours not yet folded read as every node
+	// on, so a node off in them folds a silent hour into its paths' normals
+	// — less sensitive for a while, never an alert.
+	lastFed  time.Time
+	counting map[uint]bool
+	onAll    map[int64]map[uint]bool
+	backAt   map[uint]time.Time
+	buckets  [Buckets]map[Key]*model.PathCounters
+	start    time.Time // the newest bucket's start
+	states   map[Key]*pathState
+	outages  map[uint32]bool
 	// baselined is the last hour folded into the normals.
 	baselined int64
 }
@@ -149,13 +221,125 @@ func (d *Detector) now() time.Time {
 	return time.Now()
 }
 
-// Observe adds a polled sample's counters to the window.
-func (d *Detector) Observe(k Key, c model.PathCounters) {
+// Covered says a poll of the panel worked: the window is being fed.
+// counting are the nodes the panel lists as counting now, nil when it did
+// not say; every other node — switched off, unreachable, too old, a wrong
+// clock, or deleted from the panel — is not counting, and its silence is no
+// block.
+func (d *Detector) Covered(counting map[uint]bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	now := d.now()
+	d.lastFed = now
 	if d.Started.IsZero() {
-		d.Started = d.now()
+		d.Started = now
 	}
+	// A feed that was broken for less than the panel keeps lost nothing:
+	// the next poll brought it all. Longer, and the hours it spans are short
+	// of what happened.
+	if !d.lostSince.IsZero() {
+		if now.Sub(d.lostSince) >= panelKeeps {
+			d.markBlind(d.lostSince, now)
+		}
+		d.lostSince = time.Time{}
+	}
+	if counting == nil {
+		return
+	}
+	// onAll is, per hour, the nodes that counted at every poll of it: a node
+	// missing from it was off for some of that hour, which is not its
+	// paths' normal.
+	hour := now.Truncate(time.Hour).Unix()
+	if d.onAll == nil {
+		d.onAll = map[int64]map[uint]bool{}
+	}
+	if have, ok := d.onAll[hour]; !ok {
+		d.onAll[hour] = maps.Clone(counting)
+	} else {
+		for n := range have {
+			if !counting[n] {
+				delete(have, n)
+			}
+		}
+	}
+	for h := range d.onAll {
+		if h < hour-48*3600 {
+			delete(d.onAll, h)
+		}
+	}
+	// A node that comes back is judged once the window covers it again.
+	if d.counting != nil {
+		for n := range counting {
+			if !d.counting[n] {
+				if d.backAt == nil {
+					d.backAt = map[uint]time.Time{}
+				}
+				d.backAt[n] = now
+				delete(d.onAll[hour], n) // the hour it came back in is one it was off in
+			}
+		}
+		for n := range d.backAt {
+			if !counting[n] {
+				delete(d.backAt, n)
+			}
+		}
+	}
+	d.counting = counting
+}
+
+// off is whether node is known not to be counting. The caller holds mu.
+func (d *Detector) off(node uint) bool { return d.counting != nil && !d.counting[node] }
+
+// Lost says a poll failed or was not made: nothing is judged until the feed
+// has run unbroken for a bucket again — no data is not no traffic.
+func (d *Detector) Lost() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.lostSince.IsZero() {
+		d.lostSince = d.now()
+	}
+	d.Started = time.Time{}
+	d.buckets = [Buckets]map[Key]*model.PathCounters{}
+}
+
+// Gapped says the panel dropped samples before they were read: what the
+// window and the stored hours hold of the last panelKeeps is short.
+func (d *Detector) Gapped() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	now := d.now()
+	d.Started = time.Time{}
+	d.buckets = [Buckets]map[Key]*model.PathCounters{}
+	d.markBlind(now.Add(-panelKeeps), now)
+}
+
+// markBlind notes the hours from..to as ones the normals must not learn
+// from (at most the eight days the hourly rows are kept). The caller holds
+// mu.
+func (d *Detector) markBlind(from, to time.Time) {
+	if d.blind == nil {
+		d.blind = map[int64]bool{}
+	}
+	if oldest := to.Add(-8 * 24 * time.Hour); from.Before(oldest) {
+		from = oldest
+	}
+	for h := from.Truncate(time.Hour); !h.After(to); h = h.Add(time.Hour) {
+		d.blind[h.Unix()] = true
+	}
+	for h := range d.blind {
+		if h < to.Add(-9*24*time.Hour).Unix() {
+			delete(d.blind, h)
+		}
+	}
+}
+
+// Observe adds a polled sample's counters to the window.
+func (d *Detector) Observe(k Key, c model.PathCounters) {
+	if k.ASN == OtherASN {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.rotate(d.now())
 	b := d.buckets[0]
 	if b == nil {
@@ -165,6 +349,7 @@ func (d *Detector) Observe(k Key, c model.PathCounters) {
 	have := b[k]
 	if have == nil {
 		if len(b) >= maxWindowKeys {
+			d.overflowed = d.now()
 			return
 		}
 		have = &model.PathCounters{}
@@ -215,10 +400,78 @@ func SlotOf(t time.Time) int {
 	return (int(t.Weekday())+6)%7*24 + t.Hour()
 }
 
+// load reads the degraded paths and outages a previous run left, and when
+// that run was last fed: a stop longer than the panel keeps samples left
+// hours that are short of what happened.
+func (d *Detector) load(ctx context.Context, now time.Time) error {
+	var rows []PathState
+	tx := d.DB.WithContext(ctx)
+	if err := tx.Find(&rows).Error; err != nil {
+		return err
+	}
+	var seen model.State
+	if err := tx.Where("key = ?", stateSeen).Limit(1).Find(&seen).Error; err != nil {
+		return err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.loaded {
+		return nil
+	}
+	d.states, d.outages, d.saved = map[Key]*pathState{}, map[uint32]bool{}, map[Key]PathState{}
+	for _, r := range rows {
+		k := Key{r.NodeID, r.Inbound, r.ASN, r.Network}
+		d.saved[k] = r
+		if r.NodeID == 0 && r.Network == "" {
+			d.outages[r.ASN] = true
+			continue
+		}
+		// It was down when Insight stopped: it stays down until two good
+		// evaluations say otherwise, and the hours since are not its normal.
+		d.states[k] = &pathState{degraded: true, alerted: r.Alerted, reason: r.Reason, since: r.Since, lastBad: now}
+	}
+	if !d.seenLoaded {
+		// From the last poll that worked before the stop to the first one
+		// after the start: the stop itself. The value is written with the
+		// evaluations, up to a flush late, so it is given that much slack.
+		var at int64
+		first := d.Started
+		if first.IsZero() {
+			first = now
+		}
+		if _, err := fmt.Sscan(seen.Value, &at); err == nil && at > 0 {
+			if last := time.Unix(at, 0); first.Sub(last) >= panelKeeps+BucketEvery {
+				d.markBlind(last, first)
+			}
+		}
+		d.seenLoaded = true
+	}
+	d.loaded = true
+	return nil
+}
+
+// stateSeen is when a poll last worked, as of the last evaluation.
+const stateSeen = "detect_seen"
+
 // Evaluate folds finished hours into the normals, judges every path with a
 // normal against the window, and raises the alerts the changes make.
 func (d *Detector) Evaluate(ctx context.Context) error {
 	now := d.now()
+	// The states first: an hour a path was down in must not be folded
+	// because a restart came between.
+	d.mu.Lock()
+	loaded, fed := d.loaded, d.lastFed
+	d.mu.Unlock()
+	if !loaded {
+		if err := d.load(ctx, now); err != nil {
+			return err
+		}
+	}
+	if !fed.IsZero() {
+		if err := model.PutState(d.DB.WithContext(ctx), stateSeen, fmt.Sprint(fed.Unix())); err != nil {
+			return err
+		}
+	}
 	if err := d.foldHours(ctx, now); err != nil {
 		return err
 	}
@@ -229,8 +482,10 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 	// The hour-of-week normal once it has seen slotMin weeks, the recent
 	// one until then.
 	slotNormals, recentNormals := map[Key]Baseline{}, map[Key]Baseline{}
+	known := map[Key]bool{}
 	for _, b := range baselines {
 		k := Key{b.NodeID, b.Inbound, b.ASN, b.Network}
+		known[k] = true
 		switch {
 		case b.Slot == RecentSlot && b.N >= recentMin:
 			recentNormals[k] = b
@@ -246,11 +501,12 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 	d.rotate(now)
 	win := d.window()
 	// How much time the window holds: a full one, or what has passed since
-	// Insight started — after a restart a rate read over the full span
-	// would make every path look like it dropped. Under one bucket, nothing
-	// is judged yet.
+	// the feed last (re)started — a rate read over the full span would make
+	// every path look like it dropped. Under one bucket, or with no feed at
+	// all, nothing is judged: the states stay as they are.
 	if d.Started.IsZero() {
-		d.Started = now
+		d.mu.Unlock()
+		return nil
 	}
 	span := time.Duration(Buckets) * BucketEvery
 	if covered := now.Sub(d.Started); covered < BucketEvery {
@@ -259,11 +515,13 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 	} else if covered < span {
 		span = covered
 	}
-	if d.states == nil {
-		d.states = map[Key]*pathState{}
-	}
-	if d.outages == nil {
-		d.outages = map[uint32]bool{}
+	overflowed := !d.overflowed.IsZero() && now.Sub(d.overflowed) < time.Duration(Buckets)*BucketEvery
+	// A path whose every normal is gone (pruned: no traffic for a week, its
+	// node or inbound removed) is forgotten without a word.
+	for k := range d.states {
+		if !known[k] {
+			delete(d.states, k)
+		}
 	}
 	var alerts []Alert
 	type asnView struct {
@@ -276,6 +534,9 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 		keys = append(keys, k)
 	}
 	sort.Slice(keys, func(i, j int) bool { return less(keys[i], keys[j]) })
+	// present are the ASNs that still have a normal, judged this time or
+	// not.
+	present := map[uint32]bool{}
 	type change struct {
 		k      Key
 		to     bool
@@ -283,14 +544,54 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 		detail map[string]float64
 	}
 	var changes []change
+	at := now.Unix()
 	for _, k := range keys {
 		b := normals[k]
-		if b.MeanAuthed < minNormal {
+		if k.ASN == OtherASN {
 			continue
 		}
-		w := win[k]
-		bad, reason, detail := judge(b, w, span)
+		present[k.ASN] = true
 		st := d.states[k]
+		if st != nil && st.degraded {
+			st.lastBad = now
+		}
+		// A node that is not counting sends nothing: that is not a block.
+		// Its paths keep their state and are left out of the ASN's count —
+		// and so are those of a node that came back less than a window
+		// ago, whose window is still mostly the silence before.
+		if d.off(k.Node) {
+			continue
+		}
+		if back, ok := d.backAt[k.Node]; ok {
+			if now.Sub(back) < time.Duration(Buckets)*BucketEvery {
+				continue
+			}
+			delete(d.backAt, k.Node)
+		}
+		view := func() *asnView {
+			v := byASN[k.ASN]
+			if v == nil {
+				v = &asnView{nodes: map[uint]bool{}}
+				byASN[k.ASN] = v
+			}
+			return v
+		}
+		if b.MeanAuthed < minNormal {
+			// Too quiet at this hour to judge; a path already down still
+			// counts as down for its ASN.
+			if st != nil && st.degraded {
+				v := view()
+				v.paths++
+				v.degraded++
+				v.nodes[k.Node] = true
+			}
+			continue
+		}
+		w, seen := win[k]
+		bad, reason, detail := judge(b, w, span)
+		if bad && reason == reasonDrop && overflowed && !seen {
+			bad = false // the window could not hold it: unknown, not a drop
+		}
 		if st == nil {
 			st = &pathState{}
 			d.states[k] = st
@@ -298,7 +599,7 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 		if bad {
 			st.bad, st.good = st.bad+1, 0
 			if !st.degraded && st.bad >= confirm {
-				st.degraded, st.reason = true, reason
+				st.degraded, st.reason, st.since, st.lastBad = true, reason, at, now
 				changes = append(changes, change{k, true, reason, detail})
 			}
 		} else {
@@ -308,23 +609,19 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 				changes = append(changes, change{k, false, st.reason, detail})
 			}
 		}
-		v := byASN[k.ASN]
-		if v == nil {
-			v = &asnView{nodes: map[uint]bool{}}
-			byASN[k.ASN] = v
-		}
+		v := view()
 		v.paths++
 		v.nodes[k.Node] = true
 		if st.degraded {
 			v.degraded++
 		}
 	}
-	at := now.Unix()
 	asns := make([]uint32, 0, len(byASN))
 	for a := range byASN {
 		asns = append(asns, a)
 	}
 	sort.Slice(asns, func(i, j int) bool { return asns[i] < asns[j] })
+	ended := map[uint32]bool{}
 	for _, asn := range asns {
 		v := byASN[asn]
 		out := len(v.nodes) >= 2 && v.degraded == v.paths
@@ -334,10 +631,22 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 			alerts = append(alerts, Alert{Kind: KindOutage, ASN: asn, At: at, Detail: detailJSON(map[string]float64{"paths": float64(v.paths), "nodes": float64(len(v.nodes))})})
 		case !out && d.outages[asn] && v.degraded*2 < v.paths:
 			delete(d.outages, asn)
+			ended[asn] = true
 			alerts = append(alerts, Alert{Kind: KindOutageEnd, ASN: asn, At: at})
 		}
 	}
+	// An outage whose ASN has no normal left (pruned) has nothing to end it:
+	// it ends here. One whose paths were only not judged this time — their
+	// nodes are off — stays.
+	for asn := range d.outages {
+		if !present[asn] {
+			delete(d.outages, asn)
+			alerts = append(alerts, Alert{Kind: KindOutageEnd, ASN: asn, At: at})
+		}
+	}
+	changed := map[Key]bool{}
 	for _, c := range changes {
+		changed[c.k] = true
 		st := d.states[c.k]
 		if c.to && d.outages[c.k.ASN] {
 			continue // the ASN's own alert says it
@@ -355,12 +664,82 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 			Reason: c.reason, At: at, Detail: detailJSON(c.detail),
 		})
 	}
-	d.mu.Unlock()
-	for i := range alerts {
-		if err := d.DB.WithContext(ctx).Create(&alerts[i]).Error; err != nil {
-			return err
+	// The ASN is back and some of its paths are not: they were never
+	// alerted (the outage spoke for them), so they are said now.
+	for _, k := range keys {
+		st := d.states[k]
+		if st == nil || !st.degraded || st.alerted || !ended[k.ASN] || changed[k] {
+			continue
 		}
-		if d.Send != nil {
+		st.alerted = true
+		alerts = append(alerts, Alert{
+			Kind: KindDegraded, NodeID: k.Node, Inbound: k.Inbound, ASN: k.ASN, Network: k.Network,
+			Reason: st.reason, At: at, Detail: detailJSON(map[string]float64{"normalAuthedPerHour": normals[k].MeanAuthed}),
+		})
+	}
+	// What the database must hold now, against what it holds.
+	want := map[Key]PathState{}
+	for k, st := range d.states {
+		if st.degraded {
+			want[k] = PathState{NodeID: k.Node, Inbound: k.Inbound, ASN: k.ASN, Network: k.Network, Alerted: st.alerted, Reason: st.reason, Since: st.since}
+		} else if st.bad == 0 && now.Sub(st.lastBad) > 2*time.Hour {
+			delete(d.states, k) // nothing left to remember about a healthy path
+		}
+	}
+	for asn := range d.outages {
+		k := Key{ASN: asn}
+		row, ok := d.saved[k]
+		if !ok {
+			row = PathState{ASN: asn, Since: at}
+		}
+		want[k] = row
+	}
+	var put []PathState
+	var drop []Key
+	for k, row := range want {
+		if d.saved[k] != row {
+			put = append(put, row)
+		}
+	}
+	for k := range d.saved {
+		if _, ok := want[k]; !ok {
+			drop = append(drop, k)
+		}
+	}
+	d.mu.Unlock()
+	if len(alerts) == 0 && len(put) == 0 && len(drop) == 0 {
+		return nil
+	}
+	// The states and their alerts are written together: an alert that could
+	// not be stored must not leave a state that says it was.
+	err := d.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, k := range drop {
+			if err := tx.Where("node_id = ? AND inbound = ? AND asn = ? AND network = ?", k.Node, k.Inbound, k.ASN, k.Network).Delete(&PathState{}).Error; err != nil {
+				return err
+			}
+		}
+		if len(put) > 0 {
+			if err := tx.Clauses(clause.OnConflict{UpdateAll: true}).CreateInBatches(put, 200).Error; err != nil {
+				return err
+			}
+		}
+		for i := range alerts {
+			if err := tx.Create(&alerts[i]).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	d.mu.Lock()
+	if err != nil {
+		d.loaded = false // back to what the database holds
+		d.mu.Unlock()
+		return err
+	}
+	d.saved = want
+	d.mu.Unlock()
+	if d.Send != nil {
+		for i := range alerts {
 			d.Send(ctx, alerts[i])
 		}
 	}
@@ -378,7 +757,8 @@ func judge(b Baseline, w model.PathCounters, span time.Duration) (bool, string, 
 			return true, reasonFailures, detail
 		}
 	}
-	if perHour <= dropFraction*b.MeanAuthed && z(perHour, b.MeanAuthed, b.VarAuthed, math.Sqrt(b.MeanAuthed)) <= -zBad {
+	expected := b.MeanAuthed * float64(span) / float64(time.Hour)
+	if expected >= minExpected && perHour <= dropFraction*b.MeanAuthed && z(perHour, b.MeanAuthed, b.VarAuthed, math.Sqrt(b.MeanAuthed)) <= -zBad {
 		return true, reasonDrop, detail
 	}
 	if w.Authed >= minWindow {
@@ -466,11 +846,28 @@ type hourRow struct {
 }
 
 func (d *Detector) foldHour(ctx context.Context, hour int64) error {
+	d.mu.Lock()
+	blind := d.blind[hour]
+	frozen := map[Key]bool{}
+	for k, st := range d.states {
+		if !st.lastBad.IsZero() && st.lastBad.Unix() >= hour && hour-st.since < int64(relearnAfter/time.Second) {
+			frozen[k] = true
+		}
+	}
+	on, known := d.onAll[hour]
+	offIn := func(n uint) bool { return known && !on[n] }
+	d.mu.Unlock()
+	mark := func(tx *gorm.DB) error { return model.PutState(tx, stateBaselined, fmt.Sprint(hour)) }
+	if blind {
+		// The feed was broken for part of it: what was stored is less than
+		// what happened, and would be learned as a quiet hour.
+		return mark(d.DB.WithContext(ctx))
+	}
 	var rows []hourRow
 	err := d.DB.WithContext(ctx).Model(&model.PathHour{}).
 		Select("node_id, inbound, client_asn, network, SUM(accepted) AS accepted, SUM(authed) AS authed, SUM(early_close) AS early_close, "+
 			"SUM(failed_tls + failed_auth + failed_timeout + failed_reset + failed_eof + failed_other) AS failed").
-		Where("hour = ?", hour).Group("node_id, inbound, client_asn, network").Scan(&rows).Error
+		Where("hour = ? AND client_asn <> ?", hour, OtherASN).Group("node_id, inbound, client_asn, network").Scan(&rows).Error
 	if err != nil {
 		return err
 	}
@@ -494,11 +891,22 @@ func (d *Detector) foldHour(ctx context.Context, hour int64) error {
 		}
 		for _, b := range known {
 			k := Key{b.NodeID, b.Inbound, b.ASN, b.Network}
-			if !seen[k] {
+			if !seen[k] && k.ASN != OtherASN {
 				obs[k] = hourRow{NodeID: k.Node, Inbound: k.Inbound, ClientASN: k.ASN, Network: k.Network}
 			}
 		}
 		for k, r := range obs {
+			// Not an hour its node was off in for any part: what it counted
+			// then, or did not, is the node's silence and not the path's.
+			if offIn(k.Node) {
+				continue
+			}
+			// An hour a path was bad in is not its normal: learned, a block
+			// would pull the mean down and the variance up until the block
+			// itself read as normal and "recovered" two hours in.
+			if frozen[k] {
+				continue
+			}
 			for _, s := range []struct {
 				slot  int
 				alpha float64
@@ -516,9 +924,78 @@ func (d *Detector) foldHour(ctx context.Context, hour int64) error {
 				}
 			}
 		}
-		return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "key"}}, DoUpdates: clause.AssignmentColumns([]string{"value"})}).
-			Create(&model.State{Key: stateBaselined, Value: fmt.Sprint(hour)}).Error
+		return mark(tx)
 	})
+}
+
+// Prune forgets what nothing will read again: the normals of a path with no
+// stored hour left (seven days without a connection — its node or inbound
+// removed, or its network gone), the probe history of an endpoint with none,
+// and alerts past alertsKept.
+//
+// Only once the stored hours reach seven days back, the week they are kept
+// for (Compact keeps them to UTC midnight seven days ago, so a running feed
+// always does). They age out by the clock whether or not anything is
+// polled, so after a week without a feed — the panel down, the token revoked
+// — every path would look gone, and normals that took weeks to learn would go
+// with them, both while the feed is down and in the first week after it is
+// back.
+func (d *Detector) Prune(ctx context.Context) error {
+	tx := d.DB.WithContext(ctx)
+	now := d.now()
+	if err := tx.Where("at < ?", now.Add(-alertsKept).Unix()).Delete(&Alert{}).Error; err != nil {
+		return err
+	}
+	var fresh, old []model.PathHour
+	if err := tx.Select("id").Where("hour >= ?", now.Add(-24*time.Hour).Unix()).Limit(1).Find(&fresh).Error; err != nil || len(fresh) == 0 {
+		return err
+	}
+	if err := tx.Select("id").Where("hour <= ?", now.Add(-7*24*time.Hour).Unix()).Limit(1).Find(&old).Error; err != nil || len(old) == 0 {
+		return err
+	}
+	// One pass over the stored hours for the paths that still have one, then
+	// the stale ones by key: a correlated delete has no index to walk
+	// path_hours by and held the write lock for its whole scan.
+	var live []struct {
+		NodeID    uint
+		Inbound   string
+		ClientASN uint32
+		Network   string
+	}
+	if err := tx.Model(&model.PathHour{}).Distinct("node_id", "inbound", "client_asn", "network").Scan(&live).Error; err != nil {
+		return err
+	}
+	paths, endpoints := map[Key]bool{}, map[Endpoint]bool{}
+	for _, r := range live {
+		paths[Key{r.NodeID, r.Inbound, r.ClientASN, r.Network}] = true
+		endpoints[Endpoint{r.NodeID, r.Inbound}] = true
+	}
+	var known []Baseline
+	if err := tx.Select("node_id", "inbound", "asn", "network").Where("slot = ?", RecentSlot).Find(&known).Error; err != nil {
+		return err
+	}
+	for _, b := range known {
+		if paths[Key{b.NodeID, b.Inbound, b.ASN, b.Network}] {
+			continue
+		}
+		if err := tx.Where("node_id = ? AND inbound = ? AND asn = ? AND network = ?", b.NodeID, b.Inbound, b.ASN, b.Network).
+			Delete(&Baseline{}).Error; err != nil {
+			return err
+		}
+	}
+	var held []Suspicion
+	if err := tx.Select("node_id", "inbound").Find(&held).Error; err != nil {
+		return err
+	}
+	for _, sus := range held {
+		if endpoints[Endpoint{sus.NodeID, sus.Inbound}] {
+			continue
+		}
+		if err := tx.Where("node_id = ? AND inbound = ?", sus.NodeID, sus.Inbound).Delete(&Suspicion{}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // update moves a normal toward one observed hour.

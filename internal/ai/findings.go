@@ -132,7 +132,38 @@ func Parse(content string, t Table) ([]Finding, int, error) {
 	var out []Finding
 	dropped := 0
 	seen := map[Finding]bool{}
+	// The model read the tags as the table spelled them (clean); a finding
+	// is matched, and kept, by the tag itself.
+	// Two tags the table spelled alike cannot be told apart in an answer:
+	// a finding naming that spelling is about neither.
+	tags, twice := map[string]string{}, map[string]bool{}
+	spell := func(tag string) {
+		c := clean(tag)
+		if c == "" {
+			return // a tag of no letters at all is named by no finding
+		}
+		if have, ok := tags[c]; ok && have != tag {
+			twice[c] = true
+		}
+		tags[c] = tag
+	}
+	for _, p := range t.Paths {
+		spell(p.Inbound)
+	}
+	for _, s := range t.Probed {
+		spell(s.Inbound)
+	}
 	for _, f := range answer.Findings {
+		if (f.Inbound != "" && twice[f.Inbound]) || (f.ToInbound != "" && twice[f.ToInbound]) {
+			dropped++
+			continue
+		}
+		if tag, ok := tags[f.Inbound]; ok && f.Inbound != "" {
+			f.Inbound = tag
+		}
+		if tag, ok := tags[f.ToInbound]; ok && f.ToInbound != "" {
+			f.ToInbound = tag
+		}
 		n, ok := needs[f.Code]
 		valid := ok && (f.Severity == "info" || f.Severity == "warn" || f.Severity == "critical")
 		if valid && n.asn && !asns[f.ASN] {
@@ -199,60 +230,87 @@ const (
 // sees only readings the data supports (§4.8: a wrong proposal must be
 // cheap).
 func supported(f Finding, t Table) bool {
-	blocked := func(p Path) bool { return p.Degraded || p.Success < blockedBelow }
+	out := map[uint32]bool{}
+	for _, a := range t.Outages {
+		out[a] = true
+	}
+	down := func(p Path) bool { return p.Degraded || p.Success < blockedBelow }
+	// Blocked is down while its network is up: in an outage nothing of the
+	// operator's is blocked and nothing is worth rotating (P20).
+	blocked := func(p Path) bool { return down(p) && !out[p.ASN] }
+	works := func(p Path) bool { return !p.Degraded && p.Success >= worksFrom }
 	var all []Path // the finding's network, or every path
 	for _, p := range t.Paths {
 		if f.ASN == 0 || p.ASN == f.ASN {
 			all = append(all, p)
 		}
 	}
-	find := func(node uint, inbound string) (Path, bool) {
+	// rows are an endpoint's paths for the finding's network: one per
+	// network (tcp, udp) of the inbound.
+	rows := func(node uint, inbound string) []Path {
+		var got []Path
 		for _, p := range all {
 			if p.Node == node && p.Inbound == inbound {
-				return p, true
+				got = append(got, p)
 			}
 		}
-		return Path{}, false
+		return got
 	}
-	every := func(keep func(Path) bool, test func(Path) bool) (n int, ok bool) {
-		for _, p := range all {
-			if keep(p) {
-				n++
-				if !test(p) {
-					return n, false
-				}
-			}
-		}
-		return n, n > 0
-	}
-	switch f.Code {
-	case CodeASNOutage:
-		for _, a := range t.Outages {
-			if a == f.ASN {
+	anyOf := func(ps []Path, test func(Path) bool) bool {
+		for _, p := range ps {
+			if test(p) {
 				return true
 			}
 		}
-		_, ok := every(func(Path) bool { return true }, func(p Path) bool { return p.Success < 20 })
-		return ok
+		return false
+	}
+	allOf := func(ps []Path, test func(Path) bool) bool {
+		for _, p := range ps {
+			if !test(p) {
+				return false
+			}
+		}
+		return len(ps) > 0
+	}
+	where := func(keep func(Path) bool) []Path {
+		var got []Path
+		for _, p := range all {
+			if keep(p) {
+				got = append(got, p)
+			}
+		}
+		return got
+	}
+	switch f.Code {
+	case CodeASNOutage:
+		if out[f.ASN] {
+			return true
+		}
+		return allOf(all, func(p Path) bool { return p.Success < 20 })
 	case CodeInboundBlocked:
-		p, ok := find(f.Node, f.Inbound)
-		return ok && blocked(p)
+		return anyOf(rows(f.Node, f.Inbound), blocked)
 	case CodeNodeBlocked:
-		_, ok := every(func(p Path) bool { return p.Node == f.Node }, blocked)
-		return ok
+		// Every path of the network on this node, and one that works on
+		// another: a network down everywhere is not this node's address.
+		here := where(func(p Path) bool { return p.Node == f.Node })
+		return allOf(here, blocked) && anyOf(where(func(p Path) bool { return p.Node != f.Node }), works)
 	case CodeProtoBlocked:
-		n, ok := every(func(p Path) bool { return p.Inbound == f.Inbound }, blocked)
-		return ok && n >= 2
+		same := where(func(p Path) bool { return p.Inbound == f.Inbound })
+		nodes := map[uint]bool{}
+		for _, p := range same {
+			nodes[p.Node] = true
+		}
+		return allOf(same, blocked) && len(nodes) >= 2
 	case CodeThrottled:
-		p, ok := find(f.Node, f.Inbound)
-		return ok && p.Early >= 30 && (p.NormalEarly < 0 || p.Early >= 2*p.NormalEarly)
+		return anyOf(rows(f.Node, f.Inbound), func(p Path) bool {
+			return p.Early >= 30 && (p.NormalEarly < 0 || p.Early >= 2*p.NormalEarly)
+		})
 	case CodeDegrading:
-		p, ok := find(f.Node, f.Inbound)
-		return ok && (p.Degraded || (p.NormalFail >= 0 && p.Fail >= p.NormalFail+15))
+		return anyOf(rows(f.Node, f.Inbound), func(p Path) bool {
+			return p.Degraded || (p.NormalFail >= 0 && p.Fail >= p.NormalFail+15)
+		})
 	case CodeMoveUsers:
-		from, ok1 := find(f.Node, f.Inbound)
-		to, ok2 := find(f.ToNode, f.ToInbound)
-		return ok1 && ok2 && blocked(from) && !to.Degraded && to.Success >= worksFrom
+		return anyOf(rows(f.Node, f.Inbound), blocked) && allOf(rows(f.ToNode, f.ToInbound), works)
 	case CodeProbing, CodeRotateEndpoint:
 		for _, s := range t.Probed {
 			if s.NodeID == f.Node && s.Inbound == f.Inbound && s.Score > 0 {
@@ -262,12 +320,8 @@ func supported(f Finding, t Table) bool {
 		if f.Code == CodeProbing {
 			return false
 		}
-		for _, p := range t.Paths { // a blocked endpoint is worth rotating too
-			if p.Node == f.Node && p.Inbound == f.Inbound && blocked(p) {
-				return true
-			}
-		}
-		return false
+		// A blocked endpoint is worth rotating too.
+		return anyOf(t.Paths, func(p Path) bool { return p.Node == f.Node && p.Inbound == f.Inbound && blocked(p) })
 	case CodeRotateAddress:
 		asns := map[uint32]bool{}
 		for _, p := range t.Paths {
@@ -276,19 +330,13 @@ func supported(f Finding, t Table) bool {
 			}
 		}
 		for a := range asns {
-			g := Finding{Code: CodeNodeBlocked, ASN: a, Node: f.Node}
-			if supported(g, t) {
+			if supported(Finding{Code: CodeNodeBlocked, ASN: a, Node: f.Node}, t) {
 				return true
 			}
 		}
 		return false
 	case CodeAllClear:
-		for _, p := range t.Paths {
-			if blocked(p) {
-				return false
-			}
-		}
-		return len(t.Outages) == 0
+		return !anyOf(t.Paths, down) && len(t.Outages) == 0
 	}
 	return false
 }

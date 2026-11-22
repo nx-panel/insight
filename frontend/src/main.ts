@@ -1,8 +1,6 @@
 import { createApp } from 'vue'
 import PrimeVue from 'primevue/config'
 import ToastService from 'primevue/toastservice'
-import ConfirmationService from 'primevue/confirmationservice'
-import Tooltip from 'primevue/tooltip'
 import Aura from '@primeuix/themes/aura'
 import { definePreset } from '@primeuix/themes'
 import 'primeicons/primeicons.css'
@@ -11,8 +9,8 @@ import App from './App.vue'
 import { router } from './router'
 import { i18n } from './i18n'
 
-// Notif's colour: a signal teal, so its admin is told apart from the
-// panel's and Shop's at a glance.
+// Insight's colour: a teal, so its admin is told apart from the panel's at a
+// glance.
 const Insight = definePreset(Aura, {
   semantic: {
     primary: {
@@ -43,8 +41,6 @@ createApp(App)
     license: import.meta.env.VITE_PRIMEUI_LICENSE,
   })
   .use(ToastService)
-  .use(ConfirmationService)
-  .directive('tooltip', Tooltip)
   .use(i18n)
   .use(router)
   .mount('#app')

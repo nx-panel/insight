@@ -6,7 +6,7 @@ import SecretInput from '../components/SecretInput.vue'
 import InputText from 'primevue/inputtext'
 import Button from 'primevue/button'
 import QrcodeVue from 'qrcode.vue'
-import { api, type Me } from '../api'
+import { api, ApiError, type Me } from '../api'
 
 const { t } = useI18n()
 const toast = useToast()
@@ -19,7 +19,16 @@ const offPassword = ref('')
 const busy = ref(false)
 
 async function load() {
-  me.value = await api.me()
+  try {
+    me.value = await api.me()
+  } catch (e) {
+    toast.add({
+      severity: 'error',
+      summary: t('common.error'),
+      detail: (e as Error).message,
+      life: 5000,
+    })
+  }
 }
 onMounted(load)
 
@@ -42,7 +51,17 @@ async function run(f: () => Promise<void>, done: string) {
 
 function changePassword() {
   return run(async () => {
-    await api.password(current.value, next.value)
+    try {
+      await api.password(current.value, next.value)
+    } catch (e) {
+      // The password did change; only the other sessions are still in.
+      // The old one left in the form would read as wrong on a second try.
+      if (e instanceof ApiError && e.code === 'sessions_not_ended') {
+        current.value = ''
+        next.value = ''
+      }
+      throw e
+    }
     current.value = ''
     next.value = ''
   }, t('security.changed'))

@@ -16,11 +16,12 @@ import (
 	"time"
 
 	"github.com/nx-panel/addon-kit/panel"
+	"gorm.io/gorm"
+
 	"github.com/nx-panel/insight/internal/config"
 	"github.com/nx-panel/insight/internal/db"
 	"github.com/nx-panel/insight/internal/model"
 	"github.com/nx-panel/insight/internal/netinfo"
-	"gorm.io/gorm"
 )
 
 func openDB(t *testing.T) *gorm.DB {
@@ -105,6 +106,10 @@ func (f *fakePanel) add(s Sample) {
 
 var hour = time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC).Unix()
 
+// atHour is the ingest's clock in these tests: within the hour the samples
+// are stamped in, so none reads as a node with a wrong clock.
+func atHour() time.Time { return time.Unix(hour+3500, 0) }
+
 // TestASampleBecomesAnHourlyRowWithoutItsPrefix is PT4's done_when: a
 // polled sample is an hourly row with the client's ASN and region, the
 // prefix nowhere in the database, and the cursor kept with it so the next
@@ -112,7 +117,7 @@ var hour = time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC).Unix()
 func TestASampleBecomesAnHourlyRowWithoutItsPrefix(t *testing.T) {
 	gdb := openDB(t)
 	fp := &fakePanel{}
-	in := &Ingest{DB: gdb, Net: netDB(t), Panel: func() Getter { return fp }}
+	in := &Ingest{Now: atHour, DB: gdb, Net: netDB(t), Panel: func() Getter { return fp }}
 	fp.add(Sample{
 		NodeID: 3, DateTime: hour + 125, Inbound: "vless-reality", Network: "tcp", Prefix: "5.160.7.0/24",
 		SourceKind: "peer", Accepted: 10, Authed: 7, Failed: map[string]uint32{"auth": 2, "timeout": 1}, EarlyClose: 1,
@@ -146,7 +151,7 @@ func TestASampleBecomesAnHourlyRowWithoutItsPrefix(t *testing.T) {
 	assertNoPrefix(t, gdb)
 
 	fp.add(Sample{NodeID: 3, DateTime: hour + 3000, Inbound: "vless-reality", Network: "tcp", Prefix: "5.160.7.0/24", SourceKind: "peer", Accepted: 1})
-	fresh := &Ingest{DB: gdb, Net: in.Net, Panel: in.Panel} // a restart
+	fresh := &Ingest{Now: atHour, DB: gdb, Net: in.Net, Panel: in.Panel} // a restart
 	if err := fresh.Poll(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +200,7 @@ func assertNoPrefix(t *testing.T, gdb *gorm.DB) {
 func TestTopKFoldsTheRest(t *testing.T) {
 	gdb := openDB(t)
 	fp := &fakePanel{}
-	in := &Ingest{DB: gdb, Net: netDB(t), Panel: func() Getter { return fp }}
+	in := &Ingest{Now: atHour, DB: gdb, Net: netDB(t), Panel: func() Getter { return fp }}
 	for i := range 35 {
 		fp.add(Sample{NodeID: 1, DateTime: hour, Inbound: "in", Network: "tcp", Prefix: fmt.Sprintf("100.%d.0.0/24", i), SourceKind: "peer", Accepted: uint32(100 - i)})
 	}
@@ -206,7 +211,7 @@ func TestTopKFoldsTheRest(t *testing.T) {
 		t.Fatal(err)
 	}
 	fp.add(Sample{NodeID: 1, DateTime: hour, Inbound: "in", Network: "tcp", Prefix: "100.39.0.0/24", SourceKind: "peer", Accepted: 1000})
-	fresh := &Ingest{DB: gdb, Net: in.Net, Panel: in.Panel}
+	fresh := &Ingest{Now: atHour, DB: gdb, Net: in.Net, Panel: in.Panel}
 	if err := fresh.Poll(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +240,7 @@ func TestTopKFoldsTheRest(t *testing.T) {
 func TestPollStates(t *testing.T) {
 	gdb := openDB(t)
 	fp := &fakePanel{status: http.StatusNotFound}
-	in := &Ingest{DB: gdb, Net: netDB(t), Panel: func() Getter { return fp }}
+	in := &Ingest{Now: atHour, DB: gdb, Net: netDB(t), Panel: func() Getter { return fp }}
 	_ = in.Poll(t.Context())
 	if s := in.Status(); s.State != StateUnsupported {
 		t.Fatalf("404: %+v", s)
@@ -249,7 +254,7 @@ func TestPollStates(t *testing.T) {
 	if err := in.Poll(t.Context()); err != nil || in.Status().State != StateOK {
 		t.Fatalf("ok: %v %+v", err, in.Status())
 	}
-	unregistered := &Ingest{DB: gdb, Panel: func() Getter { return nil }}
+	unregistered := &Ingest{Now: atHour, DB: gdb, Panel: func() Getter { return nil }}
 	if err := unregistered.Poll(t.Context()); err != nil || unregistered.Status().State != StateWaiting {
 		t.Fatalf("unregistered: %v %+v", err, unregistered.Status())
 	}
@@ -365,7 +370,7 @@ func TestPostgres(t *testing.T) {
 		gdb.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(m)
 	}
 	fp := &fakePanel{}
-	in := &Ingest{DB: gdb, Net: netDB(t), Panel: func() Getter { return fp }}
+	in := &Ingest{Now: atHour, DB: gdb, Net: netDB(t), Panel: func() Getter { return fp }}
 	for i := range 2 {
 		fp.add(Sample{NodeID: 1, DateTime: hour, Inbound: "in", Network: "tcp", Prefix: "5.160.1.0/24", SourceKind: "peer", Accepted: uint32(i + 1)})
 		if err := in.Poll(t.Context()); err != nil {
@@ -385,5 +390,145 @@ func TestPostgres(t *testing.T) {
 	var d model.PathDay
 	if err := gdb.First(&d).Error; err != nil || d.Accepted != 3 {
 		t.Fatalf("day %+v, %v", d, err)
+	}
+}
+
+// TestACursorThePanelNeverGaveIsLetGo: a panel that restarted (or another
+// panel, or a restored database) answers our cursor with gap and everything
+// it holds, numbered from somewhere below it. Its cursor is taken — kept,
+// ours would ask for and add all of that again on every poll.
+func TestACursorThePanelNeverGaveIsLetGo(t *testing.T) {
+	gdb := openDB(t)
+	fp := &gapPanel{}
+	var fed []bool
+	gaps := 0
+	in := &Ingest{
+		Now: atHour, DB: gdb, Net: netDB(t), Panel: func() Getter { return fp },
+		Fed: func(ok bool, _ []NodeState) { fed = append(fed, ok) }, Gapped: func() { gaps++ },
+	}
+	if err := gdb.Create(&model.State{Key: stateCursor, Value: "900000"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if err := in.Poll(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := in.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var rows []model.PathHour
+	gdb.Find(&rows)
+	if len(rows) != 1 || rows[0].Accepted != 10 {
+		t.Fatalf("rows = %+v, want the one sample counted once", rows)
+	}
+	if fmt.Sprint(fed) != "[true true true]" || gaps != 1 {
+		t.Fatalf("fed = %v, gaps = %d, want three good polls and the gap reported once", fed, gaps)
+	}
+}
+
+// gapPanel holds one sample at cursor 7 and answers any cursor above it the
+// way the panel does: everything, with gap.
+type gapPanel struct{}
+
+func (gapPanel) Get(_ context.Context, path string, out any) error {
+	var since uint64
+	fmt.Sscanf(path[strings.Index(path, "since=")+6:], "%d", &since)
+	p := page{Active: true, Samples: []Sample{}, Cursor: 7}
+	if since > 7 {
+		p.Gap, since = true, 0
+	}
+	if since < 7 {
+		p.Samples = []Sample{{Cursor: 7, NodeID: 1, DateTime: hour + 10, Inbound: "in", Network: "tcp", Prefix: "5.160.7.0/24", SourceKind: "peer", Accepted: 10}}
+	}
+	raw, _ := json.Marshal(p)
+	return json.Unmarshal(raw, out)
+}
+
+// TestNothingIsPolledBeforeTheNetworksAreKnown: a sample looked up against
+// an empty table would be stored for good with no network and no country.
+func TestNothingIsPolledBeforeTheNetworksAreKnown(t *testing.T) {
+	gdb := openDB(t)
+	fp := &fakePanel{}
+	fp.add(Sample{NodeID: 1, DateTime: hour + 10, Inbound: "in", Network: "tcp", Prefix: "5.160.7.0/24", SourceKind: "peer", Accepted: 10})
+	in := &Ingest{Now: atHour, DB: gdb, Net: &netinfo.DB{}, Panel: func() Getter { return fp }}
+	if err := in.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(fp.asked) != 0 || in.Status().Pending != 0 {
+		t.Fatalf("polled with no network table: %v", fp.asked)
+	}
+	in.Net = netDB(t)
+	if err := in.Poll(t.Context()); err != nil || in.Status().Pending != 1 {
+		t.Fatalf("with the table: pending %d, %v", in.Status().Pending, err)
+	}
+}
+
+// TestANodeWithAWrongClockIsNotCounting: its samples are dropped for their
+// timestamp, and the feed says so of the node — its paths would otherwise
+// read as silent, and silence as a block.
+func TestANodeWithAWrongClockIsNotCounting(t *testing.T) {
+	gdb := openDB(t)
+	fp := &fakePanel{}
+	fp.add(Sample{NodeID: 1, DateTime: hour + 10, Inbound: "in", Network: "tcp", Prefix: "5.160.7.0/24", SourceKind: "peer", Accepted: 10})
+	fp.add(Sample{NodeID: 2, DateTime: hour - 30*3600, Inbound: "in", Network: "tcp", Prefix: "5.160.7.0/24", SourceKind: "peer", Accepted: 10})
+	var got []NodeState
+	in := &Ingest{Now: atHour, DB: gdb, Net: netDB(t), Panel: func() Getter { return skewPanel{fakePanel: fp} }, Fed: func(_ bool, nodes []NodeState) { got = nodes }}
+	if err := in.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].State != "on" || got[1].State != StateSkewed || in.Status().Skewed != 1 || in.Status().Pending != 1 {
+		t.Fatalf("nodes = %+v, status %+v", got, in.Status())
+	}
+}
+
+// skewPanel is fakePanel listing two nodes as counting, or the nodes it
+// names.
+type skewPanel struct {
+	*fakePanel
+	nodes []NodeState
+}
+
+func (p skewPanel) Get(ctx context.Context, path string, out any) error {
+	if err := p.fakePanel.Get(ctx, path, out); err != nil {
+		return err
+	}
+	if pg, ok := out.(*page); ok {
+		pg.Nodes = []NodeState{{ID: 1, State: "on"}, {ID: 2, State: "on"}}
+		if p.nodes != nil {
+			pg.Nodes = p.nodes
+		}
+	}
+	return nil
+}
+
+// TestAnEmptyListStaysAList: a poll listing no node — the deleted one's
+// skewed samples still in the panel's buffer — is "every node off", not "not
+// known", which would keep the old list counting.
+func TestAnEmptyListStaysAList(t *testing.T) {
+	fp := &fakePanel{}
+	fp.add(Sample{NodeID: 2, DateTime: hour - 30*3600, Inbound: "in", Network: "tcp", Prefix: "5.160.7.0/24", SourceKind: "peer", Accepted: 10})
+	got := []NodeState{{ID: 9}}
+	in := &Ingest{Now: atHour, DB: openDB(t), Net: netDB(t), Panel: func() Getter { return skewPanel{fp, []NodeState{}} }, Fed: func(_ bool, nodes []NodeState) { got = nodes }}
+	if err := in.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || len(got) != 0 || in.Status().Skewed != 1 {
+		t.Fatalf("nodes = %#v, status %+v", got, in.Status())
+	}
+}
+
+// TestCountingIsTheNodesListedOn: a node listed off, skewed or not listed at
+// all (deleted) is not counting; a poll with no list is not known.
+func TestCountingIsTheNodesListedOn(t *testing.T) {
+	if Counting(nil) != nil {
+		t.Fatal("no list read as a list")
+	}
+	got := Counting([]NodeState{{ID: 1, State: StateNodeOn}, {ID: 2, State: "off"}, {ID: 3, State: StateSkewed}})
+	if len(got) != 1 || !got[1] {
+		t.Fatalf("counting = %v, want only node 1", got)
+	}
+	if got := Counting([]NodeState{}); got == nil || len(got) != 0 {
+		t.Fatalf("an empty list = %v, want every node off", got)
 	}
 }

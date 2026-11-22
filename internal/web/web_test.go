@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/nx-panel/addon-kit/addon"
+	"gorm.io/gorm"
+
 	"github.com/nx-panel/insight/internal/admins"
 	"github.com/nx-panel/insight/internal/ai"
 	"github.com/nx-panel/insight/internal/config"
@@ -19,7 +21,6 @@ import (
 	"github.com/nx-panel/insight/internal/detect"
 	"github.com/nx-panel/insight/internal/model"
 	"github.com/nx-panel/insight/internal/netinfo"
-	"gorm.io/gorm"
 )
 
 const manifest = `{"api":1,"slug":"insight","name":"NX Insight","version":"0.1.0","scopes":[{"scope":"telemetry:read","purpose":"x"}],"setup":"/nx/setup","health":"/health"}`
@@ -208,6 +209,24 @@ func TestAISettingsKeepTheKeyServerSide(t *testing.T) {
 	if s.Key != "sk-secret" || s.Model != "m2" {
 		t.Fatalf("an empty key replaced the saved one: %+v", s)
 	}
+	// Through a proxy with a password: shown masked, and saved back as
+	// shown without losing the password or the key.
+	proxy := "socks5://u:p!ss*@127.0.0.1:1080"
+	e.call("PUT", "/api/ai", map[string]any{"url": "https://api.example.com/v1", "model": "m2", "key": "sk-secret", "proxy": proxy, "dailyTokens": 50000}, &v)
+	if v["proxy"] != "socks5://u:********@127.0.0.1:1080" {
+		t.Fatalf("proxy shown as %v", v["proxy"])
+	}
+	e.call("PUT", "/api/ai", map[string]any{"url": "https://api.example.com/v1", "model": "m3", "proxy": v["proxy"], "dailyTokens": 50000}, &v)
+	if s, _ := ai.Load(t.Context(), e.db); s.Key != "sk-secret" || s.Proxy != proxy || s.Model != "m3" {
+		t.Fatalf("saving the form as shown changed the key or the proxy: %+v", s)
+	}
+	// Another host without the key typed again: the saved key does not go
+	// with it.
+	e.call("PUT", "/api/ai", map[string]any{"url": "https://elsewhere.example.net/v1", "model": "m3", "proxy": v["proxy"], "dailyTokens": 50000}, &v)
+	if s, _ := ai.Load(t.Context(), e.db); s.Key != "" || v["keySet"] != false {
+		t.Fatalf("the key followed the address to another host: %+v", s)
+	}
+	e.call("PUT", "/api/ai", map[string]any{"url": "https://api.example.com/v1", "model": "m2", "key": "sk-secret", "dailyTokens": 50000}, &v)
 	var bad map[string]any
 	if code := e.call("PUT", "/api/ai", map[string]any{"enabled": true, "url": "", "model": ""}, &bad); code != http.StatusBadRequest || bad["code"] != "ai_needs" {
 		t.Fatalf("enabled with nothing = %d %v", code, bad)
