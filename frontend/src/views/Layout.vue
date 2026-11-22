@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import Button from 'primevue/button'
+import Message from 'primevue/message'
 import Select from 'primevue/select'
 import { api } from '../api'
 import { locales, setLocale, type Locale } from '../i18n'
@@ -13,6 +14,7 @@ const credit =
   'IP address to ASN data from iptoasn.com. IP geolocation by DB-IP (https://db-ip.com), licensed under CC BY 4.0.'
 
 const router = useRouter()
+const route = useRoute()
 const open = ref(false)
 
 const nav = computed(() => [
@@ -81,6 +83,13 @@ function pick(l: Locale) {
         <b>{{ t('app.name') }}</b>
       </header>
       <main class="content">
+        <Message
+          v-if="route.name !== 'security'"
+          class="caution"
+          severity="warn"
+          :closable="false"
+          >{{ t('app.caution') }}</Message
+        >
         <RouterView />
         <footer class="credit muted">{{ credit }}</footer>
       </main>
@@ -89,6 +98,9 @@ function pick(l: Locale) {
 </template>
 
 <style scoped>
+.caution {
+  margin-bottom: 1rem;
+}
 .shell {
   display: flex;
   min-height: 100vh;

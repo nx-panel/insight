@@ -4,7 +4,12 @@ import { createI18n } from 'vue-i18n'
 // message: vue-i18n reads them as linked messages and plurals.
 
 const en = {
-  app: { name: 'NX Insight', tagline: 'Which paths to your nodes still work' },
+  app: {
+    name: 'NX Insight',
+    tagline: 'Which paths to your nodes still work',
+    caution:
+      'These are estimates from counts, not proof: a network can look blocked when it is quiet, and AI findings can be wrong. Check a finding against the numbers, and with a real user if you can, before moving users or rotating anything.',
+  },
   nav: {
     overview: 'Overview',
     nodes: 'Nodes',
@@ -256,7 +261,12 @@ const en = {
 type Messages = typeof en
 
 const fa: Messages = {
-  app: { name: 'NX Insight', tagline: 'کدام مسیرها به نودهایتان هنوز کار می‌کنند' },
+  app: {
+    name: 'NX Insight',
+    tagline: 'کدام مسیرها به نودهایتان هنوز کار می‌کنند',
+    caution:
+      'این‌ها برآوردهایی از روی شمارش‌اند، نه اثبات: شبکه‌ای که کم‌کار است ممکن است مسدود به نظر برسد و یافته‌های هوش مصنوعی ممکن است اشتباه باشند. پیش از جابه‌جا کردن کاربران یا عوض کردن چیزی، هر یافته را با عددها و اگر می‌شود با یک کاربر واقعی بسنجید.',
+  },
   nav: {
     overview: 'نمای کلی',
     nodes: 'نودها',
@@ -505,7 +515,12 @@ const fa: Messages = {
 }
 
 const ru: Messages = {
-  app: { name: 'NX Insight', tagline: 'Какие пути к вашим узлам ещё работают' },
+  app: {
+    name: 'NX Insight',
+    tagline: 'Какие пути к вашим узлам ещё работают',
+    caution:
+      'Это оценки по подсчётам, а не доказательства: тихая сеть может выглядеть заблокированной, а выводы ИИ могут быть ошибочными. Прежде чем переводить пользователей или что-то менять, сверьте вывод с цифрами и, если можно, с реальным пользователем.',
+  },
   nav: {
     overview: 'Обзор',
     nodes: 'Узлы',
@@ -753,7 +768,12 @@ const ru: Messages = {
 }
 
 const zh: Messages = {
-  app: { name: 'NX Insight', tagline: '到您节点的哪些路径仍然可用' },
+  app: {
+    name: 'NX Insight',
+    tagline: '到您节点的哪些路径仍然可用',
+    caution:
+      '这些是基于计数的估计，而非证据：安静的网络可能看起来像被封锁，AI 的结论也可能出错。在迁移用户或更换任何东西之前，请对照数字核实结论，如有可能再找一位真实用户确认。',
+  },
   nav: {
     overview: '概览',
     nodes: '节点',
