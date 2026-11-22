@@ -102,10 +102,10 @@
       },
       {
         "help": {
-          "en": "Where you open Insight, scheme, host and port only, e.g. https://notif.example.com:8099; the admin path goes after it. With HTTPS on it is needed now and names Insight's port (none means 443).",
+          "en": "Where you open Insight, scheme, host and port only, e.g. https://insight.example.com:8099; the admin path goes after it. With HTTPS on it is needed now and names Insight's port (none means 443).",
           "fa": "آدرسی که Insight را با آن باز می‌کنید، فقط پروتکل، میزبان و پورت. با HTTPS روشن همین حالا لازم است و پورت Insight را دارد (بدون پورت یعنی ۴۴۳).",
           "ru": "Адрес, по которому вы открываете Insight: только схема, хост и порт. С HTTPS он нужен сразу и называет порт Insight (без порта — 443).",
-          "zh": "您打开 Insight 的地址，只含协议、主机和端口，例如 https://notif.example.com:8099。启用 HTTPS 时现在就需要，并包含 Insight 的端口（不写即 443）。"
+          "zh": "您打开 Insight 的地址，只含协议、主机和端口，例如 https://insight.example.com:8099。启用 HTTPS 时现在就需要，并包含 Insight 的端口（不写即 443）。"
         },
         "key": "public_url",
         "label": {
@@ -217,6 +217,22 @@
           "fa": "پراکسی برای تلگرام (socks5:// یا http://)",
           "ru": "Прокси для Telegram (socks5:// или http://)",
           "zh": "Telegram 代理（socks5:// 或 http://）"
+        }
+      },
+      {
+        "key": "telegram_api",
+        "type": "string",
+        "label": {
+          "en": "Bot API address (Bale or a mirror)",
+          "fa": "آدرس Bot API (بله یا آینه)",
+          "ru": "Адрес Bot API (Bale или зеркало)",
+          "zh": "Bot API 地址（Bale 或镜像）"
+        },
+        "help": {
+          "en": "Empty: Telegram. https://tapi.bale.ai sends the alerts through a Bale bot.",
+          "fa": "خالی: تلگرام. با https://tapi.bale.ai هشدارها از راه ربات بله فرستاده می‌شوند.",
+          "ru": "Пусто — Telegram. https://tapi.bale.ai — оповещения через бота Bale.",
+          "zh": "留空：Telegram。填 https://tapi.bale.ai 则通过 Bale 机器人发送告警。"
         }
       },
       {

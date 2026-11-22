@@ -1,0 +1,31 @@
+# NX Insight's compose stack. The install writes .env beside this file with
+# the answers to the manifest's options (NX_OPT_*), the panel's address
+# and the claim code; `docker compose up -d` starts it.
+services:
+  insight:
+    image: ghcr.io/nx-panel/insight:${NX_ADDON_VERSION:-latest}
+    container_name: insight
+    restart: unless-stopped
+    # Time for the last flush of the cells in hand.
+    stop_grace_period: 30s
+    env_file: .env
+    environment:
+      # The install's listen address is where the port is published (below);
+      # inside the container Insight listens on every interface.
+      NX_OPT_LISTEN: ""
+    # The port may be below 1024 — acme serves on 443 — and the image's
+    # user is not root.
+    sysctls:
+      - net.ipv4.ip_unprivileged_port_start=0
+    # The panel on the same host, or a proxy for the AI provider or
+    # Telegram, is reached from the container at host.docker.internal.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      # On the install's listen address when it names one (install.sh).
+      - "${NX_PORT_PUBLISH:-${NX_OPT_PORT:-8099}:${NX_OPT_PORT:-8099}}"
+      # The CA's HTTP-01 check (https=acme-http): port 80, else a loopback
+      # port nothing uses.
+      - "${NX_HTTP_PUBLISH:-127.0.0.1::8080}"
+    volumes:
+      - ./data:/data

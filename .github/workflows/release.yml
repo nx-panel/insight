@@ -1,0 +1,99 @@
+# On a v* tag: the image the docker install pulls (docker.yml), then the
+# release with the binaries the script install downloads and their checksums,
+# last, so the directory never sees a release whose image is missing. The
+# manifest must name the tag's version and carry NX's signature — signed
+# on the owner's machine (scripts/sign.sh) before the tag is pushed, since the
+# signature covers the version. The `sign` job then signs the release's
+# SHA256SUMS (scripts/sign-sums.sh) — the panel installs a release by itself
+# only when SHA256SUMS.sig is there.
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+  packages: write
+jobs:
+  check:
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: the manifest names this release and NX signed it
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          have="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' nx-addon.json | head -n 1)"
+          [ "$want" = "$have" ] || { echo "nx-addon.json says $have, the tag is $want"; exit 1; }
+          kit() { go run github.com/nx-panel/addon-kit/cmd/nx-addon "$@"; }
+          kit check nx-addon.json
+          [ "$(kit verify nx-addon.json)" = "signed by: NX" ] || { echo "nx-addon.json is not signed by NX: run scripts/sign.sh"; exit 1; }
+
+  image:
+    needs: check
+    uses: ./.github/workflows/docker.yml
+    secrets: inherit
+
+  release:
+    needs: image
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: the admin web
+        working-directory: frontend
+        env:
+          VITE_PRIMEUI_LICENSE: ${{ secrets.VITE_PRIMEUI_LICENSE }}
+        run: npm ci --no-audit --no-fund && npm run build
+      - name: binaries
+        run: |
+          mkdir dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-s -w" -o insight .
+            tar -czf "dist/insight-linux-${arch}.tar.gz" insight
+          done
+          cp nx-addon.json install.sh dist/
+          (cd dist && sha256sum * > SHA256SUMS)
+      - name: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pre=""
+          case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" $pre --generate-notes \
+            --notes "Docker: \`docker pull ghcr.io/nx-panel/insight:${GITHUB_REF_NAME#v}\`"
+
+  sign:
+    needs: release
+    if: ${{ !cancelled() && needs.release.result == 'success' }}
+    runs-on: ubicloud-standard-2
+    environment: release-signing
+    steps:
+      - uses: actions/checkout@v7
+      # For `go run` of addon-kit's nx-addon, at the version go.mod requires.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: sign SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIGNING_KEY: ${{ secrets.NX_SIGNING_KEY }}
+        run: |
+          set -eu
+          if [ -z "$SIGNING_KEY" ]; then
+            echo "::error::NX_SIGNING_KEY is not set, so nx-panel/insight $GITHUB_REF_NAME is NOT signed and panels will not install it. Set the secret, or run scripts/sign-sums.sh $GITHUB_REF_NAME where the key is."
+            exit 1
+          fi
+          umask 077
+          key="$RUNNER_TEMP/nx-signing.key"
+          trap 'rm -f "$key"' EXIT
+          printf '%s' "$SIGNING_KEY" | base64 -d > "$key"
+          NX_ADDON_KEY="$key" scripts/sign-sums.sh "$GITHUB_REF_NAME"
