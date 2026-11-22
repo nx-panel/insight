@@ -34,6 +34,22 @@
         }
       },
       {
+        "help": {
+          "en": "Insight's admin, its API and the panel's calls are all under this path; the root answers nothing. A random one keeps scanners off it. Empty: the root.",
+          "fa": "ادمین Insight، API آن و درخواست‌های پنل همه زیر این مسیرند؛ ریشه جوابی نمی‌دهد. خالی: ریشه.",
+          "ru": "Админка Insight, её API и вызовы панели — под этим путём; корень не отвечает. Пусто — корень.",
+          "zh": "Insight 的管理后台、API 和面板请求都在此路径下；根路径不应答。留空：根路径。"
+        },
+        "key": "base_path",
+        "label": {
+          "en": "Admin path",
+          "fa": "مسیر ادمین",
+          "ru": "Путь админки",
+          "zh": "管理后台路径"
+        },
+        "type": "path"
+      },
+      {
         "key": "database",
         "type": "choice",
         "choices": [
@@ -50,13 +66,111 @@
       },
       {
         "key": "database_dsn",
-        "type": "string",
         "label": {
-          "en": "PostgreSQL connection string",
-          "fa": "رشتهٔ اتصال PostgreSQL",
-          "ru": "Строка подключения PostgreSQL",
-          "zh": "PostgreSQL 连接字符串"
+          "en": "PostgreSQL connection",
+          "fa": "اتصال PostgreSQL",
+          "ru": "Подключение к PostgreSQL",
+          "zh": "PostgreSQL 连接"
+        },
+        "required": true,
+        "type": "secret",
+        "when": {
+          "database": "postgres"
         }
+      },
+      {
+        "default": "admin",
+        "key": "admin_username",
+        "label": {
+          "en": "Admin username",
+          "fa": "نام کاربری ادمین",
+          "ru": "Имя администратора",
+          "zh": "管理员用户名"
+        },
+        "type": "string"
+      },
+      {
+        "key": "admin_password",
+        "label": {
+          "en": "Admin password",
+          "fa": "رمز ادمین",
+          "ru": "Пароль администратора",
+          "zh": "管理员密码"
+        },
+        "required": true,
+        "type": "password"
+      },
+      {
+        "help": {
+          "en": "Where you open Insight, scheme, host and port only, e.g. https://notif.example.com:8099; the admin path goes after it. With HTTPS on it is needed now and names Insight's port (none means 443).",
+          "fa": "آدرسی که Insight را با آن باز می‌کنید، فقط پروتکل، میزبان و پورت. با HTTPS روشن همین حالا لازم است و پورت Insight را دارد (بدون پورت یعنی ۴۴۳).",
+          "ru": "Адрес, по которому вы открываете Insight: только схема, хост и порт. С HTTPS он нужен сразу и называет порт Insight (без порта — 443).",
+          "zh": "您打开 Insight 的地址，只含协议、主机和端口，例如 https://notif.example.com:8099。启用 HTTPS 时现在就需要，并包含 Insight 的端口（不写即 443）。"
+        },
+        "key": "public_url",
+        "label": {
+          "en": "Insight's public address",
+          "fa": "آدرس عمومی Insight",
+          "ru": "Публичный адрес Insight",
+          "zh": "Insight 的公开地址"
+        },
+        "type": "url"
+      },
+      {
+        "choices": [
+          "panel",
+          "acme",
+          "acme-http",
+          "self-signed",
+          "off"
+        ],
+        "default": "panel",
+        "help": {
+          "en": "panel: one of the panel's certificates, renewed by the panel, on any port. acme: a free certificate; the port is 443. acme-http: the same on any port, the CA asking on port 80. self-signed: Insight's own; the panel shows it to trust. off: plain HTTP, for a proxy of yours.",
+          "fa": "panel: گواهی پنل، روی هر پورت. acme: گواهی رایگان، پورت ۴۴۳. acme-http: همان روی هر پورت، بررسی روی ۸۰. self-signed: گواهی خودش، پنل برای اعتماد نشانش می‌دهد. off: HTTP ساده، پشت پراکسی.",
+          "ru": "panel: сертификат панели, любой порт. acme: бесплатный, порт 443. acme-http: то же, любой порт, проверка на 80. self-signed: свой, панель покажет его. off: HTTP за вашим прокси.",
+          "zh": "panel：面板证书，任意端口。acme：免费证书，端口 443。acme-http：同上，任意端口，80 端口验证。self-signed：自有证书，面板显示以供信任。off：明文 HTTP，用于您的代理。"
+        },
+        "key": "https",
+        "label": {
+          "en": "HTTPS certificate",
+          "fa": "گواهی HTTPS",
+          "ru": "Сертификат HTTPS",
+          "zh": "HTTPS 证书"
+        },
+        "type": "choice"
+      },
+      {
+        "help": {
+          "en": "Only behind a reverse proxy (the panel's ingress, nginx, a CDN): its addresses or ranges, comma-separated, e.g. 127.0.0.1. Its X-Forwarded-For then names the visitor, so sign-in limits count each one apart. Empty: no header is believed.",
+          "fa": "فقط پشت پراکسی معکوس (اینگرس پنل، nginx): نشانی یا بازه‌هایش، مثل 127.0.0.1. محدودیت ورود هر بازدیدکننده را جدا می‌شمارد. خالی: بی‌اعتماد.",
+          "ru": "Только за обратным прокси (ingress панели, nginx): его адреса, напр. 127.0.0.1. Лимит входа считает каждого посетителя. Пусто: не доверять.",
+          "zh": "仅在反向代理（面板 ingress、nginx）之后：其地址或网段，如 127.0.0.1。登录限制按访客分别计数。留空：不信任。"
+        },
+        "key": "trusted_proxies",
+        "label": {
+          "en": "Trusted reverse proxies",
+          "fa": "پراکسی‌های معکوس مورد اعتماد",
+          "ru": "Доверенные обратные прокси",
+          "zh": "受信任的反向代理"
+        },
+        "type": "string"
+      },
+      {
+        "help": {
+          "en": "Empty: every interface. 127.0.0.1 only for a reverse proxy on this server: nothing then reaches Insight around it, and the panel must reach Insight through the proxy or on this server.",
+          "fa": "خالی: همهٔ کارت‌ها. 127.0.0.1 فقط برای پراکسی معکوس روی همین سرور؛ پنل هم باید از همان پراکسی یا همین سرور برسد.",
+          "ru": "Пусто: все интерфейсы. 127.0.0.1 — только для обратного прокси на этом сервере; панель тогда ходит через него.",
+          "zh": "留空：所有网卡。127.0.0.1 仅用于本机反向代理；面板也须经该代理或本机访问。"
+        },
+        "key": "listen",
+        "label": {
+          "en": "Listen address",
+          "fa": "نشانی گوش‌دادن",
+          "ru": "Адрес прослушивания",
+          "zh": "监听地址"
+        },
+        "type": "string"
       },
       {
         "key": "region_countries",
@@ -77,7 +191,7 @@
       },
       {
         "key": "telegram_token",
-        "type": "string",
+        "type": "secret",
         "label": {
           "en": "Telegram bot token for alerts",
           "fa": "توکن ربات تلگرام برای هشدارها",
@@ -104,6 +218,23 @@
           "ru": "Прокси для Telegram (socks5:// или http://)",
           "zh": "Telegram 代理（socks5:// 或 http://）"
         }
+      },
+      {
+        "key": "language",
+        "type": "choice",
+        "choices": [
+          "en",
+          "fa",
+          "ru",
+          "zh"
+        ],
+        "default": "en",
+        "label": {
+          "en": "Language of the alerts",
+          "fa": "زبان هشدارها",
+          "ru": "Язык оповещений",
+          "zh": "告警语言"
+        }
       }
     ]
   },
@@ -129,5 +260,6 @@
   "health": "/health",
   "requires": {
     "panel": ">=0.1.3"
-  }
+  },
+  "ui": "/"
 }

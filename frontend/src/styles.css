@@ -1,0 +1,71 @@
+:root {
+  --insight-bg: #faf8f4;
+  --insight-surface: #ffffff;
+  --insight-border: #ebe5da;
+  --insight-text: #26221c;
+  --insight-muted: #756d61;
+  font-family:
+    Vazirmatn, 'Segoe UI', system-ui, -apple-system, 'Noto Sans', 'Noto Sans Arabic', sans-serif;
+  color: var(--insight-text);
+  background: var(--insight-bg);
+}
+
+:root.dark {
+  --insight-bg: #16140f;
+  --insight-surface: #1f1c16;
+  --insight-border: #343026;
+  --insight-text: #ece6da;
+  --insight-muted: #a69d8e;
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: var(--insight-bg);
+}
+
+.muted {
+  color: var(--insight-muted);
+}
+
+.mono {
+  font-family: ui-monospace, 'JetBrains Mono', Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.card {
+  background: var(--insight-surface);
+  border: 1px solid var(--insight-border);
+  border-radius: 12px;
+  padding: 1.25rem;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.field label {
+  font-size: 0.875rem;
+  color: var(--insight-muted);
+}
+
+/* Addresses, ids and numbers keep their own order inside right-to-left text. */
+[dir='ltr'],
+.ltr {
+  unicode-bidi: isolate;
+  direction: ltr;
+}
+
+/* An arrow in running text points the way the text reads. */
+[dir='rtl'] .dir-arrow {
+  display: inline-block;
+  transform: scaleX(-1);
+}

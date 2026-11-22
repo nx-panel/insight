@@ -79,6 +79,8 @@ type Config struct {
 	TelegramChat  int64
 	TelegramProxy string
 	TelegramAPI   string
+	// Language is what the alerts are written in: en, fa, ru or zh.
+	Language string
 }
 
 // Load reads the environment.
@@ -111,6 +113,10 @@ func Load() (Config, error) {
 			return c, fmt.Errorf("telegram_chat must be a chat id (a number): %q", chat)
 		}
 		c.TelegramChat = n
+	}
+	c.Language = strings.ToLower(option("language", "en"))
+	if !slices.Contains([]string{"en", "fa", "ru", "zh"}, c.Language) {
+		return c, fmt.Errorf("language must be en, fa, ru or zh: %q", c.Language)
 	}
 	regions, err := ParseCountries(option("region_countries", strings.Join(DefaultRegionCountries, ",")))
 	if err != nil {

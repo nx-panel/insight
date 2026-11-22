@@ -120,7 +120,31 @@ type State struct {
 
 func (State) TableName() string { return "state" }
 
+// Admin is one of Insight's own admins (the panel's are not Insight's).
+type Admin struct {
+	ID           uint   `json:"id" gorm:"primaryKey"`
+	Username     string `json:"username" gorm:"uniqueIndex;not null"`
+	PasswordHash string `json:"-" gorm:"not null"`
+	// TOTPSecret is empty while the second factor is off; TOTPLastUsed is
+	// the last time step accepted, so a code is never taken twice.
+	TOTPSecret   string `json:"-" gorm:"not null;default:''"`
+	TOTPLastUsed int64  `json:"-" gorm:"not null;default:0"`
+	LastLoginAt  int64  `json:"lastLoginAt" gorm:"not null;default:0"`
+	CreatedAt    int64  `json:"createdAt" gorm:"autoCreateTime"`
+}
+
+// TOTPEnabled reports whether the admin signs in with a second factor.
+func (a Admin) TOTPEnabled() bool { return a.TOTPSecret != "" }
+
+// Session is one sign-in, by its token's hash.
+type Session struct {
+	ID        uint   `gorm:"primaryKey"`
+	TokenHash string `gorm:"uniqueIndex;not null"`
+	AdminID   uint   `gorm:"index;not null"`
+	ExpiresAt int64  `gorm:"not null"`
+}
+
 // All is every table, for the migration.
 func All() []any {
-	return []any{&PathHour{}, &PathDay{}, &NodeNetinfo{}, &State{}}
+	return []any{&PathHour{}, &PathDay{}, &NodeNetinfo{}, &State{}, &Admin{}, &Session{}}
 }

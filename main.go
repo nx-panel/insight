@@ -4,7 +4,8 @@
 // client prefix into its network and forgets the prefix, keeps hourly and
 // daily cells in its own database, and knows each node's host network.
 //
-//	insight          serve (the default)
+//	insight                                     serve (the default)
+//	insight admin reset-password -user U -pass P
 //	insight version
 //
 // Configuration comes from the environment, the way the install passes it
@@ -19,7 +20,9 @@ import (
 	"context"
 	_ "embed"
 	"errors"
+	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -31,6 +34,8 @@ import (
 
 	"github.com/nx-panel/addon-kit/addon"
 	"github.com/nx-panel/addon-kit/panel"
+	"github.com/nx-panel/insight/frontend"
+	"github.com/nx-panel/insight/internal/admins"
 	"github.com/nx-panel/insight/internal/alert"
 	"github.com/nx-panel/insight/internal/config"
 	"github.com/nx-panel/insight/internal/db"
@@ -39,6 +44,7 @@ import (
 	"github.com/nx-panel/insight/internal/ingest"
 	"github.com/nx-panel/insight/internal/model"
 	"github.com/nx-panel/insight/internal/netinfo"
+	"github.com/nx-panel/insight/internal/web"
 	"gorm.io/gorm"
 )
 
@@ -55,10 +61,12 @@ func main() {
 	switch cmd {
 	case "run":
 		err = run()
+	case "admin":
+		err = adminCmd(os.Args[2:])
 	case "version", "-v", "--version":
 		fmt.Println("insight", version())
 	default:
-		err = fmt.Errorf("unknown command %q: run, version", cmd)
+		err = fmt.Errorf("unknown command %q: run, admin reset-password, version", cmd)
 	}
 	if err != nil {
 		log.Fatal(err)
@@ -93,9 +101,14 @@ func run() error {
 			return fmt.Errorf("NX_MANIFEST_FILE: %w", err)
 		}
 	}
-	a, err := addon.New(addon.Config{Manifest: raw, DataDir: cfg.DataDir}.FromEnv())
+	a, err := addon.New(addon.Config{Manifest: raw, DataDir: cfg.DataDir, Healthy: web.Healthy(gdb)}.FromEnv())
 	if err != nil {
 		return err
+	}
+	if made, err := admins.EnsureFirst(gdb, cfg.AdminUsername, cfg.AdminPassword); err != nil {
+		return fmt.Errorf("the first admin: %w", err)
+	} else if made {
+		log.Printf("made the first admin, %q, from the install's answers", cfg.AdminUsername)
 	}
 	a.OnEvent(func(e addon.Event) {
 		// The panel says goodbye before it deletes the token: forget the
@@ -126,7 +139,7 @@ func run() error {
 		}
 		return mgr.CityPath()
 	}
-	tg, err := alert.NewTelegram(cfg.TelegramToken, cfg.TelegramChat, cfg.TelegramProxy, cfg.TelegramAPI, alert.Names{
+	tg, err := alert.NewTelegram(cfg.TelegramToken, cfg.TelegramChat, cfg.TelegramProxy, cfg.TelegramAPI, cfg.Language, alert.Names{
 		Node: func(id uint) string {
 			var n model.NodeNetinfo
 			if gdb.Select("name").Limit(1).Find(&n, id).Error == nil {
@@ -143,7 +156,7 @@ func run() error {
 	if tg != nil {
 		send = tg.Send
 	}
-	in, _, _ := pipeline(gdb, net, client, send)
+	in, det, _ := pipeline(gdb, net, client, send)
 
 	bg, stopBg := context.WithCancel(context.Background())
 	defer stopBg()
@@ -166,12 +179,23 @@ func run() error {
 		})
 	})
 
-	mux := http.NewServeMux()
-	a.Mount(mux)
-	srv := &http.Server{Addr: cfg.Addr(), Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	var spa fs.FS
+	if sub, err := fs.Sub(frontend.Dist, "dist"); err == nil {
+		if _, err := fs.Stat(sub, "index.html"); err == nil {
+			spa = sub
+		}
+	}
+	app := web.New(gdb, a, cfg, a.Manifest().Version, spa, web.Parts{Ingest: in, Detect: det, Net: net})
+	srv := &http.Server{Addr: cfg.Addr(), Handler: app.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("nx insight %s on %s (%s)", a.Manifest().Version, cfg.Addr(), cfg.Driver)
+	httpsCtx, stopHTTPS := context.WithCancel(context.Background())
+	defer stopHTTPS()
 	errs := make(chan error, 1)
-	go func() { errs <- srv.ListenAndServe() }()
+	if app.HTTPS() {
+		go func() { errs <- app.ServeHTTPS(httpsCtx) }()
+	} else {
+		go func() { errs <- srv.ListenAndServe() }()
+	}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	select {
@@ -182,14 +206,57 @@ func run() error {
 			return err
 		}
 	case <-stop:
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		err := srv.Shutdown(ctx)
+		var err error
+		if app.HTTPS() {
+			stopHTTPS()
+			select {
+			case err = <-errs:
+				if errors.Is(err, http.ErrServerClosed) {
+					err = nil
+				}
+			case <-time.After(11 * time.Second):
+			}
+		} else {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			err = srv.Shutdown(ctx)
+		}
 		// The last flush runs as the ingest loop ends.
 		stopBg()
 		work.Wait()
 		return err
 	}
+	return nil
+}
+
+// adminCmd is the recovery path: set an admin's password (making the
+// account if it is not there), turning its second factor off and ending its
+// sessions.
+func adminCmd(args []string) error {
+	if len(args) == 0 || args[0] != "reset-password" {
+		return errors.New("usage: insight admin reset-password -user U -pass P")
+	}
+	fl := flag.NewFlagSet("reset-password", flag.ContinueOnError)
+	user := fl.String("user", "admin", "the admin's username")
+	pass := fl.String("pass", "", "the new password (at least 10 characters)")
+	if err := fl.Parse(args[1:]); err != nil {
+		return err
+	}
+	if *pass == "" {
+		return errors.New("-pass is required")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	gdb, err := db.Open(cfg)
+	if err != nil {
+		return err
+	}
+	if err := admins.ResetPassword(gdb, *user, *pass); err != nil {
+		return err
+	}
+	fmt.Printf("the password of %q is set; its two-factor sign-in is off and its sessions ended\n", *user)
 	return nil
 }
 
