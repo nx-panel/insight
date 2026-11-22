@@ -129,6 +129,9 @@ type Detector struct {
 	// Send delivers an alert (Telegram); nil stores only.
 	Send func(context.Context, Alert)
 	Now  func() time.Time
+	// Started is when Insight began watching: the window covers no more
+	// than the time since. Zero is the first Observe or Evaluate.
+	Started time.Time
 
 	mu      sync.Mutex
 	buckets [Buckets]map[Key]*model.PathCounters
@@ -150,6 +153,9 @@ func (d *Detector) now() time.Time {
 func (d *Detector) Observe(k Key, c model.PathCounters) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.Started.IsZero() {
+		d.Started = d.now()
+	}
 	d.rotate(d.now())
 	b := d.buckets[0]
 	if b == nil {
@@ -239,6 +245,20 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 	d.mu.Lock()
 	d.rotate(now)
 	win := d.window()
+	// How much time the window holds: a full one, or what has passed since
+	// Insight started — after a restart a rate read over the full span
+	// would make every path look like it dropped. Under one bucket, nothing
+	// is judged yet.
+	if d.Started.IsZero() {
+		d.Started = now
+	}
+	span := time.Duration(Buckets) * BucketEvery
+	if covered := now.Sub(d.Started); covered < BucketEvery {
+		d.mu.Unlock()
+		return nil
+	} else if covered < span {
+		span = covered
+	}
 	if d.states == nil {
 		d.states = map[Key]*pathState{}
 	}
@@ -269,7 +289,7 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 			continue
 		}
 		w := win[k]
-		bad, reason, detail := judge(b, w)
+		bad, reason, detail := judge(b, w, span)
 		st := d.states[k]
 		if st == nil {
 			st = &pathState{}
@@ -348,8 +368,8 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 }
 
 // judge compares a window with a path's normal.
-func judge(b Baseline, w model.PathCounters) (bool, string, map[string]float64) {
-	perHour := float64(w.Authed) * float64(time.Hour) / float64(BucketEvery*Buckets)
+func judge(b Baseline, w model.PathCounters, span time.Duration) (bool, string, map[string]float64) {
+	perHour := float64(w.Authed) * float64(time.Hour) / float64(span)
 	detail := map[string]float64{"authedPerHour": perHour, "normalAuthedPerHour": b.MeanAuthed}
 	if w.Accepted >= minWindow {
 		fail := float64(w.FailedAuth) / float64(w.Accepted)

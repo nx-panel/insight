@@ -34,7 +34,7 @@ func TestAReplayRaisesTheScoreAndProbedOnce(t *testing.T) {
 	gdb := openDB(t)
 	c := &clock{t: time.Date(2026, 11, 23, 12, 30, 0, 0, time.UTC)}
 	var sent []detect.Alert
-	d := &detect.Detector{DB: gdb, Now: c.now, Send: func(_ context.Context, a detect.Alert) { sent = append(sent, a) }}
+	d := &detect.Detector{DB: gdb, Now: c.now, Started: c.t, Send: func(_ context.Context, a detect.Alert) { sent = append(sent, a) }}
 	hour := c.t.Truncate(time.Hour).Unix()
 
 	hourRow(t, gdb, hour, 1, "vless-reality", 44244, model.PathCounters{Accepted: 100, Authed: 98, Replayed: 1})
@@ -106,7 +106,7 @@ func TestFollowUpFailuresCountOnlyAsASurge(t *testing.T) {
 
 	gdb := openDB(t)
 	c := &clock{t: time.Date(2026, 11, 23, 12, 30, 0, 0, time.UTC)}
-	d := &detect.Detector{DB: gdb, Now: c.now}
+	d := &detect.Detector{DB: gdb, Now: c.now, Started: c.t}
 	hour := c.t.Truncate(time.Hour).Unix()
 	for h := int64(1); h <= 7*24; h += 6 { // the week before: about 4 a window
 		hourRow(t, gdb, hour-8*3600-h*3600, 2, "ss", 44244, model.PathCounters{Accepted: 50, FollowUpFail: 4})

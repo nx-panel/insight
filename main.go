@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/nx-panel/addon-kit/addon"
+	"github.com/nx-panel/addon-kit/manifest"
 	"github.com/nx-panel/addon-kit/panel"
 	"github.com/nx-panel/insight/frontend"
 	"github.com/nx-panel/insight/internal/admins"
@@ -74,12 +75,14 @@ func main() {
 	}
 }
 
+// version is the manifest's, read without addon.New, which would draw a
+// claim code into the data directory as a side effect.
 func version() string {
-	a, err := addon.New(addon.Config{Manifest: builtinManifest})
+	m, err := manifest.Parse(builtinManifest)
 	if err != nil {
 		return "unknown"
 	}
-	return a.Manifest().Version
+	return m.Version
 }
 
 const (
@@ -289,7 +292,7 @@ func every(ctx context.Context, d time.Duration, f func()) {
 // judges the paths and the endpoints' probe evidence and the hints are
 // pushed.
 func pipeline(gdb *gorm.DB, net *netinfo.DB, client func() ingest.Getter, send func(context.Context, detect.Alert)) (*ingest.Ingest, *detect.Detector, *hints.Hints) {
-	det := &detect.Detector{DB: gdb, Send: send}
+	det := &detect.Detector{DB: gdb, Send: send, Started: time.Now()}
 	hint := &hints.Hints{DB: gdb, Prefixes: net.Prefixes, State: det, Panel: func() hints.Putter {
 		if p, ok := client().(hints.Putter); ok {
 			return p

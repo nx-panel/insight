@@ -74,7 +74,7 @@ func TestABlockedPathAlertsAndRecovers(t *testing.T) {
 	gdb := openDB(t)
 	c := &clock{time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)}
 	var sent []detect.Alert
-	d := &detect.Detector{DB: gdb, Now: c.now}
+	d := &detect.Detector{DB: gdb, Now: c.now, Started: c.t}
 	k := detect.Key{Node: 1, Inbound: "vless-reality", ASN: 44244, Network: "tcp"}
 	other := detect.Key{Node: 2, Inbound: "vless-reality", ASN: 44244, Network: "tcp"}
 	normal(gdb, t, k)
@@ -119,7 +119,7 @@ func TestABlockedPathAlertsAndRecovers(t *testing.T) {
 func TestTrafficThatStopsIsADrop(t *testing.T) {
 	gdb := openDB(t)
 	c := &clock{time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)}
-	d := &detect.Detector{DB: gdb, Now: c.now}
+	d := &detect.Detector{DB: gdb, Now: c.now, Started: c.t}
 	k := detect.Key{Node: 1, Inbound: "trojan", ASN: 58224, Network: "tcp"}
 	normal(gdb, t, k)
 	for range 2 {
@@ -140,7 +140,7 @@ func TestTrafficThatStopsIsADrop(t *testing.T) {
 func TestAWholeASNDownIsOneOutage(t *testing.T) {
 	gdb := openDB(t)
 	c := &clock{time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)}
-	d := &detect.Detector{DB: gdb, Now: c.now}
+	d := &detect.Detector{DB: gdb, Now: c.now, Started: c.t}
 	keys := []detect.Key{
 		{Node: 1, Inbound: "a", ASN: 44244, Network: "tcp"},
 		{Node: 1, Inbound: "b", ASN: 44244, Network: "tcp"},
@@ -192,7 +192,7 @@ func TestFinishedHoursBuildTheNormal(t *testing.T) {
 		}
 	}
 	c := &clock{hour.Add(time.Hour + 10*time.Minute)}
-	d := &detect.Detector{DB: gdb, Now: c.now}
+	d := &detect.Detector{DB: gdb, Now: c.now, Started: c.t}
 	for range 2 {
 		if err := d.Evaluate(t.Context()); err != nil {
 			t.Fatal(err)
@@ -207,5 +207,30 @@ func TestFinishedHoursBuildTheNormal(t *testing.T) {
 		if b.N != 1 || b.MeanAuthed != 100 || b.MeanFail != 0.1 || b.MeanEarly != 0.1 {
 			t.Fatalf("baseline = %+v, want both regions summed, once", b)
 		}
+	}
+}
+
+// TestARestartIsNotADrop: just after Insight starts, the window holds a few
+// minutes, not fifteen; the rate is read over what it holds, so a path at its
+// normal rate is not taken for one whose traffic dropped (found in the
+// two-ASN walk, 2026-11-22).
+func TestARestartIsNotADrop(t *testing.T) {
+	gdb := openDB(t)
+	c := &clock{time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)}
+	d := &detect.Detector{DB: gdb, Now: c.now, Started: c.t}
+	k := detect.Key{Node: 1, Inbound: "trojan", ASN: 58224, Network: "tcp"}
+	normal(gdb, t, k) // 120 an hour
+	if err := d.Evaluate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		traffic(d, k, 9, 9, 0) // 108 an hour
+		c.step(detect.BucketEvery)
+		if err := d.Evaluate(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := kinds(t, gdb); len(got) != 0 {
+		t.Fatalf("a path at its rate after a restart: %v", got)
 	}
 }
