@@ -117,3 +117,24 @@ func TestRefreshDownloadsAndFallsBackAMonth(t *testing.T) {
 		t.Fatalf("a restart did not load the files kept: asn %v city %v", asn, city)
 	}
 }
+
+func TestRangeToPrefixes(t *testing.T) {
+	for _, c := range []struct {
+		start, end string
+		want       []string
+	}{
+		{"5.160.0.0", "5.160.255.255", []string{"5.160.0.0/16"}},
+		{"5.160.0.0", "5.160.4.191", []string{"5.160.0.0/22", "5.160.4.0/25", "5.160.4.128/26"}},
+		{"10.0.0.1", "10.0.0.1", []string{"10.0.0.1/32"}},
+		{"0.0.0.0", "255.255.255.255", []string{"0.0.0.0/0"}},
+		{"2a01:4f8::", "2a01:4f8:ffff:ffff:ffff:ffff:ffff:ffff", []string{"2a01:4f8::/32"}},
+	} {
+		var got []string
+		for _, p := range RangeToPrefixes(netip.MustParseAddr(c.start), netip.MustParseAddr(c.end)) {
+			got = append(got, p.String())
+		}
+		if strings.Join(got, " ") != strings.Join(c.want, " ") {
+			t.Errorf("%s–%s: %v, want %v", c.start, c.end, got, c.want)
+		}
+	}
+}

@@ -124,6 +124,13 @@ type Ingest struct {
 	Panel func() Getter
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+	// Observe, when set, sees each sample's counters as polled, by node,
+	// inbound, client ASN (before top-K folding) and network — the
+	// detector's window.
+	Observe func(node uint, inbound string, asn uint32, network string, c model.PathCounters)
+	// AfterFlush runs after each successful flush in Run: the detection and
+	// the hints work on what is now in the database.
+	AfterFlush func(ctx context.Context)
 
 	mu      sync.Mutex
 	pending map[cellKey]*model.PathCounters
@@ -176,6 +183,8 @@ func (in *Ingest) Run(ctx context.Context) {
 		case <-flush.C:
 			if err := in.Flush(ctx); err != nil {
 				log.Printf("ingest: flush: %v", err)
+			} else if in.AfterFlush != nil {
+				in.AfterFlush(ctx)
 			}
 		}
 	}
@@ -263,6 +272,11 @@ func (in *Ingest) take(p page) {
 			in.pending[k] = c
 		}
 		add(c, s)
+		if in.Observe != nil {
+			var one model.PathCounters
+			add(&one, s)
+			in.Observe(s.NodeID, s.Inbound, info.ASN, s.Network, one)
+		}
 	}
 	in.cursor = max(in.cursor, p.Cursor)
 }

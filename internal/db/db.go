@@ -11,6 +11,7 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"github.com/nx-panel/insight/internal/config"
+	"github.com/nx-panel/insight/internal/detect"
 	"github.com/nx-panel/insight/internal/model"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -60,7 +61,7 @@ func Open(c config.Config) (*gorm.DB, error) {
 
 // Migrate creates the tables and the cell indexes.
 func Migrate(gdb *gorm.DB) error {
-	if err := gdb.AutoMigrate(model.All()...); err != nil {
+	if err := gdb.AutoMigrate(append(model.All(), detect.Tables()...)...); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
 	for _, stmt := range []string{

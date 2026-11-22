@@ -65,6 +65,14 @@ func (d *DB) Lookup(addr netip.Addr) Info {
 	return info
 }
 
+// Org is an ASN's name, "" when unknown.
+func (d *DB) Org(asn uint32) string {
+	if t := d.asn.Load(); t != nil {
+		return t.orgs[asn]
+	}
+	return ""
+}
+
 // Loaded reports which tables are in.
 func (d *DB) Loaded() (asn, city bool) {
 	return d.asn.Load() != nil, d.city.Load() != nil
@@ -296,4 +304,74 @@ func maybeGunzip(r io.Reader) (io.Reader, error) {
 		return gzip.NewReader(br)
 	}
 	return br, nil
+}
+
+// Prefixes are the CIDRs the given ASNs announce, as iptoasn lists their
+// ranges: public routing data, never anything of a client's. They are what
+// a subscription hint names for a client network (internal/hints).
+func (d *DB) Prefixes(asns map[uint32]bool) map[uint32][]netip.Prefix {
+	out := map[uint32][]netip.Prefix{}
+	t := d.asn.Load()
+	if t == nil || len(asns) == 0 {
+		return out
+	}
+	for i, asn := range t.asns {
+		if !asns[asn] {
+			continue
+		}
+		start := netip.AddrFrom16(t.spans[i].start).Unmap()
+		end := netip.AddrFrom16(t.spans[i].end).Unmap()
+		out[asn] = append(out[asn], RangeToPrefixes(start, end)...)
+	}
+	return out
+}
+
+// RangeToPrefixes is the shortest list of CIDRs covering start–end
+// exactly.
+func RangeToPrefixes(start, end netip.Addr) []netip.Prefix {
+	if !start.IsValid() || !end.IsValid() || start.Is4() != end.Is4() || end.Less(start) {
+		return nil
+	}
+	bits := start.BitLen()
+	var out []netip.Prefix
+	for {
+		// The widest prefix that starts at start and ends at or before end.
+		size := bits
+		for size > 0 {
+			p, err := start.Prefix(size - 1)
+			if err != nil || p.Addr() != start || lastAddr(p).Compare(end) > 0 {
+				break
+			}
+			size--
+		}
+		p := netip.PrefixFrom(start, size)
+		out = append(out, p)
+		last := lastAddr(p)
+		if last.Compare(end) >= 0 {
+			return out
+		}
+		start = last.Next()
+		if !start.IsValid() {
+			return out
+		}
+	}
+}
+
+// lastAddr is the highest address in p.
+func lastAddr(p netip.Prefix) netip.Addr {
+	a := p.Masked().Addr().As16()
+	off := 0
+	if p.Addr().Is4() {
+		off = 12
+	}
+	host := p.Addr().BitLen() - p.Bits()
+	for i := 15; i >= off && host > 0; i-- {
+		n := min(host, 8)
+		a[i] |= byte(1<<n - 1)
+		host -= n
+	}
+	if p.Addr().Is4() {
+		return netip.AddrFrom16(a).Unmap()
+	}
+	return netip.AddrFrom16(a)
 }

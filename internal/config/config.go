@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/nx-panel/addon-kit/addon"
@@ -71,6 +72,13 @@ type Config struct {
 	ASNURL          string
 	CityURL         string
 	RegionCountries []string
+	// Telegram (or Bale) for the alerts: a bot token and the admin's chat
+	// id; a proxy for a server that cannot reach Telegram, and the Bot API
+	// address for Bale or a mirror. No token: the alerts are only stored.
+	TelegramToken string
+	TelegramChat  int64
+	TelegramProxy string
+	TelegramAPI   string
 }
 
 // Load reads the environment.
@@ -93,6 +101,16 @@ func Load() (Config, error) {
 		Listen:         strings.Trim(strings.TrimSpace(addon.Option("listen")), "[]"),
 		ASNURL:         option("asn_url", DefaultASNURL),
 		CityURL:        option("city_url", DefaultCityURL),
+	}
+	c.TelegramToken = strings.TrimSpace(addon.Option("telegram_token"))
+	c.TelegramProxy = strings.TrimSpace(addon.Option("telegram_proxy"))
+	c.TelegramAPI = strings.TrimSpace(addon.Option("telegram_api"))
+	if chat := strings.TrimSpace(addon.Option("telegram_chat")); chat != "" {
+		n, err := strconv.ParseInt(chat, 10, 64)
+		if err != nil {
+			return c, fmt.Errorf("telegram_chat must be a chat id (a number): %q", chat)
+		}
+		c.TelegramChat = n
 	}
 	regions, err := ParseCountries(option("region_countries", strings.Join(DefaultRegionCountries, ",")))
 	if err != nil {

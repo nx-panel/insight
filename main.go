@@ -10,7 +10,9 @@
 // Configuration comes from the environment, the way the install passes it
 // (internal/config): NX_OPT_PORT, NX_OPT_DATABASE (sqlite|postgres),
 // NX_OPT_DATABASE_DSN, NX_OPT_REGION_COUNTRIES, NX_OPT_ASN_URL,
-// NX_OPT_CITY_URL, NX_CLAIM_CODE, NX_DATA_DIR, NX_MANIFEST_FILE.
+// NX_OPT_CITY_URL, NX_OPT_TELEGRAM_TOKEN, NX_OPT_TELEGRAM_CHAT,
+// NX_OPT_TELEGRAM_PROXY, NX_OPT_TELEGRAM_API, NX_CLAIM_CODE, NX_DATA_DIR,
+// NX_MANIFEST_FILE.
 package main
 
 import (
@@ -29,10 +31,15 @@ import (
 
 	"github.com/nx-panel/addon-kit/addon"
 	"github.com/nx-panel/addon-kit/panel"
+	"github.com/nx-panel/insight/internal/alert"
 	"github.com/nx-panel/insight/internal/config"
 	"github.com/nx-panel/insight/internal/db"
+	"github.com/nx-panel/insight/internal/detect"
+	"github.com/nx-panel/insight/internal/hints"
 	"github.com/nx-panel/insight/internal/ingest"
+	"github.com/nx-panel/insight/internal/model"
 	"github.com/nx-panel/insight/internal/netinfo"
+	"gorm.io/gorm"
 )
 
 //go:embed nx-addon.json
@@ -119,7 +126,24 @@ func run() error {
 		}
 		return mgr.CityPath()
 	}
-	in := &ingest.Ingest{DB: gdb, Net: net, Panel: client}
+	tg, err := alert.NewTelegram(cfg.TelegramToken, cfg.TelegramChat, cfg.TelegramProxy, cfg.TelegramAPI, alert.Names{
+		Node: func(id uint) string {
+			var n model.NodeNetinfo
+			if gdb.Select("name").Limit(1).Find(&n, id).Error == nil {
+				return n.Name
+			}
+			return ""
+		},
+		ASN: net.Org,
+	})
+	if err != nil {
+		return fmt.Errorf("telegram_proxy: %w", err)
+	}
+	var send func(context.Context, detect.Alert)
+	if tg != nil {
+		send = tg.Send
+	}
+	in, _, _ := pipeline(gdb, net, client, send)
 
 	bg, stopBg := context.WithCancel(context.Background())
 	defer stopBg()
@@ -182,4 +206,32 @@ func every(ctx context.Context, d time.Duration, f func()) {
 			f()
 		}
 	}
+}
+
+// pipeline wires the poll to the detector and the hints: every polled
+// sample feeds the detector's window, and after every flush the detector
+// judges and the hints are pushed.
+func pipeline(gdb *gorm.DB, net *netinfo.DB, client func() ingest.Getter, send func(context.Context, detect.Alert)) (*ingest.Ingest, *detect.Detector, *hints.Hints) {
+	det := &detect.Detector{DB: gdb, Send: send}
+	hint := &hints.Hints{DB: gdb, Prefixes: net.Prefixes, State: det, Panel: func() hints.Putter {
+		if p, ok := client().(hints.Putter); ok {
+			return p
+		}
+		return nil
+	}}
+	in := &ingest.Ingest{
+		DB: gdb, Net: net, Panel: client,
+		Observe: func(node uint, inbound string, asn uint32, network string, c model.PathCounters) {
+			det.Observe(detect.Key{Node: node, Inbound: inbound, ASN: asn, Network: network}, c)
+		},
+		AfterFlush: func(ctx context.Context) {
+			if err := det.Evaluate(ctx); err != nil {
+				log.Printf("detect: %v", err)
+			}
+			if err := hint.Push(ctx); err != nil {
+				log.Printf("hints: %v", err)
+			}
+		},
+	}
+	return in, det, hint
 }
