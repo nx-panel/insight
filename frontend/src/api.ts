@@ -131,6 +131,54 @@ export interface Matrix {
   nodes: NodeInfo[]
 }
 
+// Mode A: the admin's own model. The key is never sent back, only keySet.
+export interface AISettings {
+  enabled: boolean
+  url: string
+  model: string
+  proxy: string
+  dailyTokens: number
+  keySet: boolean
+  usedToday: number
+  running: boolean
+  countries: string[]
+}
+
+export interface AISettingsInput {
+  enabled: boolean
+  url: string
+  model: string
+  key: string
+  clearKey: boolean
+  proxy: string
+  dailyTokens: number
+}
+
+export interface AIFinding {
+  code: string
+  severity: 'info' | 'warn' | 'critical'
+  asn: number
+  node: number
+  inbound: string
+  to_node: number
+  to_inbound: string
+  confidence: number
+}
+
+export interface AIReport {
+  id: number
+  country: string
+  trigger: 'daily' | 'anomaly' | 'manual'
+  at: number
+  model: string
+  tokens: number
+  status: 'ok' | 'error' | 'budget' | 'empty'
+  error: string
+  rows: number
+  dropped: number
+  findings: string
+}
+
 // One node and inbound's probe evidence over the last six hours.
 export interface Endpoint {
   nodeId: number
@@ -201,4 +249,9 @@ export const api = {
     call<Alert[]>('GET', '/alerts?limit=100' + (before ? `&before=${before}` : '')),
   suggestions: () => call<Suggestion[]>('GET', '/suggestions'),
   endpoints: () => call<Endpoint[]>('GET', '/endpoints'),
+  ai: () => call<AISettings>('GET', '/ai'),
+  saveAI: (s: AISettingsInput) => call<AISettings>('PUT', '/ai', s),
+  aiReports: () =>
+    call<{ reports: AIReport[]; orgs: Record<string, string> }>('GET', '/ai/reports'),
+  runAI: (country: string) => call<{ started: boolean }>('POST', '/ai/run', { country }),
 }

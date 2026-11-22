@@ -36,6 +36,7 @@ import (
 	"github.com/nx-panel/addon-kit/panel"
 	"github.com/nx-panel/insight/frontend"
 	"github.com/nx-panel/insight/internal/admins"
+	"github.com/nx-panel/insight/internal/ai"
 	"github.com/nx-panel/insight/internal/alert"
 	"github.com/nx-panel/insight/internal/config"
 	"github.com/nx-panel/insight/internal/db"
@@ -160,6 +161,14 @@ func run() error {
 
 	bg, stopBg := context.WithCancel(context.Background())
 	defer stopBg()
+	// Mode A: the admin's own model reads the paths after a flush when a
+	// pass is due (internal/ai); off until the admin sets it up.
+	brain := &ai.Runner{DB: gdb, State: det, Org: net.Org, Countries: cfg.RegionCountries}
+	flushed := in.AfterFlush
+	in.AfterFlush = func(ctx context.Context) {
+		flushed(ctx)
+		brain.Tick(bg)
+	}
 	var work sync.WaitGroup
 	refreshNodes := func() {
 		if err := nodes.Refresh(bg); err != nil {
@@ -185,7 +194,7 @@ func run() error {
 			spa = sub
 		}
 	}
-	app := web.New(gdb, a, cfg, a.Manifest().Version, spa, web.Parts{Ingest: in, Detect: det, Net: net})
+	app := web.New(gdb, a, cfg, a.Manifest().Version, spa, web.Parts{Ingest: in, Detect: det, Net: net, AI: brain, Countries: cfg.RegionCountries})
 	srv := &http.Server{Addr: cfg.Addr(), Handler: app.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("nx insight %s on %s (%s)", a.Manifest().Version, cfg.Addr(), cfg.Driver)
 	httpsCtx, stopHTTPS := context.WithCancel(context.Background())

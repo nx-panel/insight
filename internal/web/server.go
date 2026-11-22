@@ -18,6 +18,7 @@ import (
 	"github.com/nx-panel/addon-kit/auth"
 	"github.com/nx-panel/addon-kit/web"
 	"github.com/nx-panel/insight/internal/admins"
+	"github.com/nx-panel/insight/internal/ai"
 	"github.com/nx-panel/insight/internal/config"
 	"github.com/nx-panel/insight/internal/detect"
 	"github.com/nx-panel/insight/internal/ingest"
@@ -37,9 +38,11 @@ type Server struct {
 	spa     fs.FS
 	logins  *auth.Limiter
 
-	ingest *ingest.Ingest
-	detect *detect.Detector
-	net    *netinfo.DB
+	ingest    *ingest.Ingest
+	detect    *detect.Detector
+	net       *netinfo.DB
+	ai        *ai.Runner
+	countries []string
 
 	mu      sync.Mutex
 	pending map[string]pendingLogin
@@ -59,6 +62,9 @@ type Parts struct {
 	Ingest *ingest.Ingest
 	Detect *detect.Detector
 	Net    *netinfo.DB
+	// AI is Mode A's runner, Countries the client countries it reads.
+	AI        *ai.Runner
+	Countries []string
 }
 
 // New wires the server; spa is the built admin web, nil for none.
@@ -67,7 +73,7 @@ func New(gdb *gorm.DB, a *addon.Addon, cfg config.Config, version string, spa fs
 		db: gdb, addon: a, cfg: cfg, version: version, spa: spa,
 		logins:  auth.NewLimiter(5, 10*time.Minute),
 		pending: map[string]pendingLogin{}, enrol: map[uint]string{},
-		ingest: p.Ingest, detect: p.Detect, net: p.Net,
+		ingest: p.Ingest, detect: p.Detect, net: p.Net, ai: p.AI, countries: p.Countries,
 	}
 	proxies, err := web.ParseProxies(cfg.TrustedProxies)
 	if err != nil {

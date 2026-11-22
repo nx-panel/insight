@@ -6,6 +6,7 @@ import Overview from './views/Overview.vue'
 import Nodes from './views/Nodes.vue'
 import Alerts from './views/Alerts.vue'
 import Probing from './views/Probing.vue'
+import Analysis from './views/Analysis.vue'
 import Security from './views/Security.vue'
 
 export const router = createRouter({
@@ -20,6 +21,7 @@ export const router = createRouter({
         { path: '', name: 'overview', component: Overview },
         { path: 'nodes', name: 'nodes', component: Nodes },
         { path: 'probing', name: 'probing', component: Probing },
+        { path: 'analysis', name: 'analysis', component: Analysis },
         { path: 'alerts', name: 'alerts', component: Alerts },
         { path: 'security', name: 'security', component: Security },
       ],

@@ -13,6 +13,7 @@ import (
 
 	"github.com/nx-panel/addon-kit/addon"
 	"github.com/nx-panel/insight/internal/admins"
+	"github.com/nx-panel/insight/internal/ai"
 	"github.com/nx-panel/insight/internal/config"
 	"github.com/nx-panel/insight/internal/db"
 	"github.com/nx-panel/insight/internal/detect"
@@ -83,7 +84,7 @@ func (e *env) call(method, path string, body, out any) int {
 // session and answered with one.
 func TestTheAdminWebNeedsASignIn(t *testing.T) {
 	e := newEnv(t)
-	for _, p := range []string{"/api/status", "/api/matrix", "/api/nodes", "/api/alerts", "/api/suggestions", "/api/endpoints"} {
+	for _, p := range []string{"/api/status", "/api/matrix", "/api/nodes", "/api/alerts", "/api/suggestions", "/api/endpoints", "/api/ai", "/api/ai/reports"} {
 		if code := e.call("GET", p, nil, nil); code != http.StatusUnauthorized {
 			t.Errorf("signed out GET %s = %d", p, code)
 		}
@@ -94,7 +95,7 @@ func TestTheAdminWebNeedsASignIn(t *testing.T) {
 	if code := e.call("POST", "/api/login", map[string]string{"username": "admin", "password": "admin-secret-1"}, nil); code != http.StatusOK {
 		t.Fatalf("sign in = %d", code)
 	}
-	for _, p := range []string{"/api/status", "/api/matrix", "/api/nodes", "/api/alerts", "/api/suggestions", "/api/endpoints"} {
+	for _, p := range []string{"/api/status", "/api/matrix", "/api/nodes", "/api/alerts", "/api/suggestions", "/api/endpoints", "/api/ai", "/api/ai/reports"} {
 		if code := e.call("GET", p, nil, nil); code != http.StatusOK {
 			t.Errorf("signed in GET %s = %d", p, code)
 		}
@@ -186,5 +187,47 @@ func TestEndpointsMostSuspectFirst(t *testing.T) {
 	e.call("GET", "/api/endpoints", nil, &got)
 	if got[0].Followed == nil || !*got[0].Followed {
 		t.Fatalf("followed = %v", got[0].Followed)
+	}
+}
+
+// TestAISettingsKeepTheKeyServerSide: the key is saved, never sent back,
+// kept when the form leaves it empty and removed only on clearKey; a bad
+// setting is refused with its code; a pass cannot start while it is off.
+func TestAISettingsKeepTheKeyServerSide(t *testing.T) {
+	e := newEnv(t)
+	e.call("POST", "/api/login", map[string]string{"username": "admin", "password": "admin-secret-1"}, nil)
+	var v map[string]any
+	if code := e.call("PUT", "/api/ai", map[string]any{"enabled": true, "url": "https://api.example.com/v1", "model": "m", "key": "sk-secret", "dailyTokens": 50000}, &v); code != http.StatusOK {
+		t.Fatalf("put = %d %v", code, v)
+	}
+	if v["keySet"] != true || v["key"] != nil {
+		t.Fatalf("view = %v", v)
+	}
+	e.call("PUT", "/api/ai", map[string]any{"enabled": false, "url": "https://api.example.com/v1", "model": "m2", "dailyTokens": 50000}, &v)
+	s, _ := ai.Load(t.Context(), e.db)
+	if s.Key != "sk-secret" || s.Model != "m2" {
+		t.Fatalf("an empty key replaced the saved one: %+v", s)
+	}
+	var bad map[string]any
+	if code := e.call("PUT", "/api/ai", map[string]any{"enabled": true, "url": "", "model": ""}, &bad); code != http.StatusBadRequest || bad["code"] != "ai_needs" {
+		t.Fatalf("enabled with nothing = %d %v", code, bad)
+	}
+	if code := e.call("POST", "/api/ai/run", map[string]string{"country": "IR"}, &bad); code != http.StatusBadRequest {
+		t.Fatalf("a country not configured = %d", code)
+	}
+	e.call("PUT", "/api/ai", map[string]any{"url": "http://127.0.0.1:11434/v1", "model": "qwen", "clearKey": true}, &v)
+	if s, _ := ai.Load(t.Context(), e.db); s.Key != "" || v["keySet"] != false {
+		t.Fatalf("clearKey kept %q", s.Key)
+	}
+	e.db.Create(&ai.Report{
+		Country: "IR", Trigger: ai.TriggerDaily, At: 1, Status: ai.StatusOK,
+		Findings: `[{"code":"asn_outage","severity":"critical","asn":44244}]`,
+	})
+	var reports struct {
+		Reports []ai.Report       `json:"reports"`
+		Orgs    map[string]string `json:"orgs"`
+	}
+	if code := e.call("GET", "/api/ai/reports?country=IR", nil, &reports); code != http.StatusOK || len(reports.Reports) != 1 || reports.Orgs["44244"] != "MCI" {
+		t.Fatalf("reports = %d %+v", code, reports)
 	}
 }

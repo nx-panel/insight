@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
+	"github.com/nx-panel/insight/internal/ai"
 	"github.com/nx-panel/insight/internal/config"
 	"github.com/nx-panel/insight/internal/detect"
 	"github.com/nx-panel/insight/internal/model"
@@ -61,7 +62,7 @@ func Open(c config.Config) (*gorm.DB, error) {
 
 // Migrate creates the tables and the cell indexes.
 func Migrate(gdb *gorm.DB) error {
-	if err := gdb.AutoMigrate(append(model.All(), detect.Tables()...)...); err != nil {
+	if err := gdb.AutoMigrate(append(append(model.All(), detect.Tables()...), ai.Tables()...)...); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
 	for _, stmt := range []string{
