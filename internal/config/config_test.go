@@ -28,3 +28,16 @@ func TestDefaults(t *testing.T) {
 		t.Fatal("postgres without a DSN was accepted")
 	}
 }
+
+func TestAShortMetricsTokenIsRefused(t *testing.T) {
+	t.Setenv("NX_DATA_DIR", t.TempDir())
+	t.Setenv("NX_OPT_METRICS_TOKEN", "short")
+	if _, err := Load(); err == nil {
+		t.Fatal("a five-character metrics token was taken")
+	}
+	t.Setenv("NX_OPT_METRICS_TOKEN", " sixteen-chars-ok ")
+	c, err := Load()
+	if err != nil || c.MetricsToken != "sixteen-chars-ok" {
+		t.Fatalf("token = %q, %v", c.MetricsToken, err)
+	}
+}

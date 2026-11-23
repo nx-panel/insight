@@ -24,6 +24,7 @@ import (
 	"github.com/nx-panel/insight/internal/config"
 	"github.com/nx-panel/insight/internal/detect"
 	"github.com/nx-panel/insight/internal/ingest"
+	"github.com/nx-panel/insight/internal/metrics"
 	"github.com/nx-panel/insight/internal/model"
 	"github.com/nx-panel/insight/internal/netinfo"
 	"github.com/nx-panel/insight/internal/tunnels"
@@ -109,6 +110,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/me/2fa/totp/confirm", s.signedIn(s.handleTOTPConfirm))
 	mux.HandleFunc("DELETE /api/me/2fa", s.signedIn(s.handleTOTPDisable))
 	s.mountData(mux)
+	// Prometheus (P28): its own bearer token, no session.
+	src := metrics.Sources{DB: s.db, Detect: s.detect, Ingest: s.ingest, Tunnels: s.tunnels}
+	if s.net != nil {
+		src.Org = s.net.Org
+	}
+	mux.HandleFunc("GET /metrics", metrics.Handler(s.cfg.MetricsToken, src))
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeCode(w, http.StatusNotFound, "not_found", "no such API route")
 	})

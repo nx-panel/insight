@@ -23,6 +23,11 @@ name. Names are cut down to forty letters, digits, spaces, dashes and
 underscores before they go — no dots, so no address or URL as written — but a tag or a provider
 name still says what it spells, so mind what you put in them. Nothing goes to NX.
 
+With a metrics token set at install, `/metrics` under the admin path feeds
+your own Prometheus, per node, inbound and client network (AS number and
+name), and the panel repository's `monitoring/` has the Grafana dashboard
+for it (`nx-insight.json`).
+
 Client addresses never leave your server: the nodes report a /24 or /48
 prefix (/40 for a 6to4 address), Insight turns it into its network the moment it reads it and keeps
 nothing else.

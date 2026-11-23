@@ -17,15 +17,20 @@
 #                    the tunnel has no link, node 1's sessions authenticate
 #                    and then carry nothing (P26: tunnel.down, no
 #                    path.degraded on every network); mend undoes it
+#   run.sh metrics   Prometheus scraping Insight's /metrics and Grafana with
+#                    the panel repository's nx-insight dashboard on
+#                    http://127.0.0.1:13000
 #   run.sh down      stop and remove the stack (WALK keeps the data)
 #
 # Needs docker, jq, sqlite3 and the sibling checkouts ../nx-panel and
-# ../nx-node on their path-telemetry branches. WALK defaults to a scratch
+# ../nx-node on their path-telemetry branches, and ../panel for the
+# dashboard. WALK defaults to a scratch
 # directory under /tmp.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)" # the directory holding insight, nx-panel, nx-node
 export WALK="${WALK:-/tmp/insight-walk}"
+export DASHBOARDS="$ROOT/panel/monitoring/grafana/dashboards"
 PANEL=http://127.0.0.1:12095
 INSIGHT=http://127.0.0.1:18099
 dc() { docker compose -f "$HERE/compose.yml" "$@"; }
@@ -182,6 +187,26 @@ block() {
 
 unblock() { dc exec node1 iptables -F INPUT; }
 
+metrics() {
+	mkdir -p "$WALK/grafana/provisioning/datasources" "$WALK/grafana/provisioning/dashboards"
+	cat >"$WALK/prometheus.yml" <<YML
+global: { scrape_interval: 15s }
+scrape_configs:
+  - job_name: nx-insight
+    metrics_path: /metrics
+    authorization: { type: Bearer, credentials: walk-metrics-token-0001 }
+    static_configs: [{ targets: ['10.80.0.30:8099'] }]
+YML
+	cat >"$WALK/grafana/provisioning/datasources/prometheus.yml" <<YML
+apiVersion: 1
+datasources:
+  - { name: Prometheus, uid: nx-prometheus, type: prometheus, access: proxy, url: http://10.80.0.40:9090, isDefault: true }
+YML
+	cp "$ROOT/panel/monitoring/grafana/provisioning/dashboards/nx.yml" "$WALK/grafana/provisioning/dashboards/nx.yml"
+	dc --profile metrics up -d prometheus grafana
+	say "Grafana: http://127.0.0.1:13000/d/nx-insight (anonymous viewer; admin / walk-admin-1)"
+}
+
 tunnel_id() { api GET /api/tunnels | jq -r '.[] | select(.name=="walk-tunnel") | .id'; }
 
 tunnel() {
@@ -240,6 +265,7 @@ check) check ;;
 tunnel) tunnel ;;
 cut) cut ;;
 mend) mend ;;
+metrics) metrics ;;
 down) dc down ;;
-*) sed -n '2,25p' "$0"; exit 2 ;;
+*) sed -n '2,28p' "$0"; exit 2 ;;
 esac

@@ -84,7 +84,14 @@ type Config struct {
 	TelegramAPI   string
 	// Language is what the alerts are written in: en, fa, ru or zh.
 	Language string
+	// MetricsToken is the bearer token GET /metrics asks for (P28); empty
+	// turns the route off.
+	MetricsToken string
 }
+
+// MinMetricsToken is the shortest metrics token taken: it guards the
+// fleet's per-network picture, so a guessable one is refused at start.
+const MinMetricsToken = 16
 
 // Load reads the environment.
 func Load() (Config, error) {
@@ -118,6 +125,10 @@ func Load() (Config, error) {
 		c.TelegramChat = n
 	}
 	c.Language = strings.ToLower(option("language", "en"))
+	c.MetricsToken = strings.TrimSpace(addon.Option("metrics_token"))
+	if c.MetricsToken != "" && len(c.MetricsToken) < MinMetricsToken {
+		return c, fmt.Errorf("metrics_token must be %d characters or more", MinMetricsToken)
+	}
 	if !slices.Contains([]string{"en", "fa", "ru", "zh"}, c.Language) {
 		return c, fmt.Errorf("language must be en, fa, ru or zh: %q", c.Language)
 	}

@@ -69,6 +69,7 @@ services:
       NX_OPT_ASN_URL: http://10.80.0.5/ip2asn.tsv.gz
       NX_OPT_CITY_URL: http://10.80.0.5/city.csv.gz
       NX_OPT_LANGUAGE: en
+      NX_OPT_METRICS_TOKEN: walk-metrics-token-0001
     command: ["/walk/bin/insight", "run"]
     ports: ["127.0.0.1:18099:8099"]
     networks: { core: { ipv4_address: 10.80.0.30 } }
@@ -97,3 +98,24 @@ services:
   trafficb:
     <<: *traffic
     network_mode: "service:clientb"
+
+  # Prometheus and Grafana for Insight's /metrics (run.sh metrics): the
+  # panel repository's nx-insight dashboard, on 127.0.0.1:13000.
+  prometheus:
+    profiles: [metrics]
+    image: prom/prometheus:latest
+    command: ["--config.file=/walk/prometheus.yml", "--storage.tsdb.path=/prometheus"]
+    volumes: ["${WALK}:/walk"]
+    networks: { core: { ipv4_address: 10.80.0.40 } }
+  grafana:
+    profiles: [metrics]
+    image: grafana/grafana:latest
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: walk-admin-1
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ${WALK}/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ${DASHBOARDS:-../../../panel/monitoring/grafana/dashboards}:/var/lib/grafana/dashboards:ro
+    ports: ["127.0.0.1:13000:3000"]
+    networks: { core: { ipv4_address: 10.80.0.41 } }

@@ -190,6 +190,22 @@
         }
       },
       {
+        "key": "metrics_token",
+        "type": "secret",
+        "label": {
+          "en": "Token for Prometheus (/metrics)",
+          "fa": "توکن Prometheus (/metrics)",
+          "ru": "Токен для Prometheus (/metrics)",
+          "zh": "Prometheus 令牌（/metrics）"
+        },
+        "help": {
+          "en": "16 characters or more. Prometheus sends it as a bearer token to the admin path's /metrics: per node, inbound and client network (AS number and name, never an address). Empty: no /metrics.",
+          "fa": "دست‌کم ۱۶ نویسه. Prometheus آن را به‌صورت bearer token به /metrics زیر مسیر ادمین می‌فرستد: به ازای نود، inbound و شبکهٔ کلاینت (شمارهٔ AS و نام، هرگز آدرس). خالی: بدون /metrics.",
+          "ru": "Не короче 16 символов. Prometheus передаёт его как bearer-токен на /metrics под путём админки: по узлу, inbound и сети клиента (номер AS и имя, никогда адрес). Пусто — без /metrics.",
+          "zh": "至少 16 个字符。Prometheus 将其作为 bearer 令牌发送到管理路径下的 /metrics：按节点、inbound 和客户端网络（AS 号和名称，绝无地址）。留空：不提供 /metrics。"
+        }
+      },
+      {
         "key": "telegram_token",
         "type": "secret",
         "label": {

@@ -397,6 +397,16 @@ func (d *Detector) rotate(now time.Time) {
 	}
 }
 
+// Recent is the window's counters per path — the last Buckets×BucketEvery,
+// every failure in FailedAuth — for the metrics. A path of the folded ASN
+// is not in it.
+func (d *Detector) Recent() map[Key]model.PathCounters {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.rotate(d.now())
+	return d.window()
+}
+
 func (d *Detector) window() map[Key]model.PathCounters {
 	out := map[Key]model.PathCounters{}
 	for _, b := range d.buckets {
