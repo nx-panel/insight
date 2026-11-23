@@ -2,7 +2,9 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -21,6 +23,7 @@ import (
 	"github.com/nx-panel/insight/internal/detect"
 	"github.com/nx-panel/insight/internal/model"
 	"github.com/nx-panel/insight/internal/netinfo"
+	"github.com/nx-panel/insight/internal/tunnels"
 )
 
 const manifest = `{"api":1,"slug":"insight","name":"NX Insight","version":"0.1.0","scopes":[{"scope":"telemetry:read","purpose":"x"}],"setup":"/nx/setup","health":"/health"}`
@@ -31,6 +34,18 @@ type env struct {
 	srv  *httptest.Server
 	http *http.Client
 	det  *detect.Detector
+	tw   *tunnels.Watcher
+}
+
+// tunnelPanel answers the tunnel watcher: one tunnel, healthy or not.
+type tunnelPanel struct{ healthy bool }
+
+func (p *tunnelPanel) Get(_ context.Context, path string, out any) error {
+	body := `{"items":[{"id":3,"name":"to-de","tag":"tunnel-to-de","mode":"reverse","relayNodeId":1,"relayName":"ir-1","originIds":[2],"originNames":["de-1"]}]}`
+	if strings.HasSuffix(path, "/status") {
+		body = fmt.Sprintf(`{"healthy":%v,"relay":{"nodeId":1,"reachable":true,"sessions":[]},"origins":[]}`, p.healthy)
+	}
+	return json.Unmarshal([]byte(body), out)
 }
 
 func newEnv(t *testing.T) *env {
@@ -51,11 +66,12 @@ func newEnv(t *testing.T) *env {
 	net := &netinfo.DB{}
 	net.SetASN(asns)
 	det := &detect.Detector{DB: gdb}
-	s := New(gdb, a, config.Config{}, "0.1.0", nil, Parts{Detect: det, Net: net})
+	tw := &tunnels.Watcher{DB: gdb}
+	s := New(gdb, a, config.Config{}, "0.1.0", nil, Parts{Detect: det, Net: net, Tunnels: tw})
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	jar, _ := cookiejar.New(nil)
-	return &env{t: t, db: gdb, srv: srv, http: &http.Client{Jar: jar}, det: det}
+	return &env{t: t, db: gdb, srv: srv, http: &http.Client{Jar: jar}, det: det, tw: tw}
 }
 
 func (e *env) call(method, path string, body, out any) int {
@@ -146,6 +162,43 @@ func TestTheMatrixAndTheNodes(t *testing.T) {
 	}
 	if code := e.call("PUT", "/api/nodes/9/override", map[string]any{"city": "x"}, nil); code != http.StatusNotFound {
 		t.Fatalf("an unknown node = %d", code)
+	}
+}
+
+// TestTheNodesShowTheirTunnels is PT16 on the Nodes page: each node lists
+// the tunnels it is the relay or an origin of, with the watcher's state and
+// its links' last 24 hours, and the status names a tunnel that is down.
+func TestTheNodesShowTheirTunnels(t *testing.T) {
+	e := newEnv(t)
+	e.call("POST", "/api/login", map[string]string{"username": "admin", "password": "admin-secret-1"}, nil)
+	fp := &tunnelPanel{}
+	e.tw.Panel = func() tunnels.Getter { return fp }
+	for range 2 {
+		if err := e.tw.Poll(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.db.Create(&model.NodeNetinfo{NodeID: 1, Name: "ir-1"})
+	e.db.Create(&model.NodeNetinfo{NodeID: 2, Name: "de-1"})
+	e.db.Create(&model.TunnelHour{
+		TunnelCell:     model.TunnelCell{Hour: time.Now().Truncate(time.Hour).Unix(), NodeID: 2, Tunnel: "tunnel-to-de", Peer: "ir-1", Server: "192.0.2.1:443", Side: "dial"},
+		TunnelCounters: model.TunnelCounters{Attempts: 40, FailedDial: 30, FailedTimeout: 8, Up: 2},
+	})
+	var rows []nodeRow
+	if code := e.call("GET", "/api/nodes", nil, &rows); code != http.StatusOK || len(rows) != 2 {
+		t.Fatalf("nodes = %d %+v", code, rows)
+	}
+	relay, origin := rows[0].Tunnels, rows[1].Tunnels
+	if len(relay) != 1 || relay[0].Role != "relay" || relay[0].State != tunnels.Down || relay[0].Name != "to-de" {
+		t.Fatalf("relay's tunnels = %+v", relay)
+	}
+	if len(origin) != 1 || origin[0].Role != "origin" || origin[0].Hours.Attempts != 40 || origin[0].Hours.Failed != 38 {
+		t.Fatalf("origin's tunnels = %+v", origin)
+	}
+	var st statusView
+	e.call("GET", "/api/status", nil, &st)
+	if len(st.TunnelsDown) != 1 || st.TunnelsDown[0] != "to-de" || st.Tunnels.State != tunnels.StateOK {
+		t.Fatalf("status = %+v / %+v", st.TunnelsDown, st.Tunnels)
 	}
 }
 

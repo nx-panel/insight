@@ -86,10 +86,14 @@ const OtherASN = model.OtherASN
 
 // Alert kinds.
 const (
-	KindDegraded     = "path.degraded"
-	KindRecovered    = "path.recovered"
-	KindOutage       = "asn.outage"
-	KindOutageEnd    = "asn.recovered"
+	KindDegraded  = "path.degraded"
+	KindRecovered = "path.recovered"
+	KindOutage    = "asn.outage"
+	KindOutageEnd = "asn.recovered"
+	// KindTunnelDown and KindTunnelUp are a node-to-node tunnel's
+	// (internal/tunnels): raised there, stored and sent like these.
+	KindTunnelDown   = "tunnel.down"
+	KindTunnelUp     = "tunnel.up"
 	RecentSlot       = -1
 	reasonFailures   = "failures"
 	reasonDrop       = "drop"
@@ -112,7 +116,9 @@ type Alert struct {
 	Inbound string `json:"inbound"`
 	ASN     uint32 `json:"asn" gorm:"column:asn"`
 	Network string `json:"network"`
-	Reason  string `json:"reason"`
+	// Tunnel is a tunnel alert's tunnel, by name; NodeID is then its relay.
+	Tunnel string `json:"tunnel,omitempty"`
+	Reason string `json:"reason"`
 	// Detail is the numbers it was judged on, as JSON.
 	Detail string `json:"detail"`
 	At     int64  `json:"at" gorm:"not null;index"`
@@ -176,6 +182,14 @@ type Detector struct {
 	// Send delivers an alert (Telegram); nil stores only.
 	Send func(context.Context, Alert)
 	Now  func() time.Time
+	// TunnelDown, when set, is the nodes a broken tunnel explains: the
+	// relays of tunnels with no link (internal/tunnels, P26). Their paths
+	// are judged as ever — the hints still move their users to what
+	// works — but a path that goes down on one says nothing (the tunnel's
+	// own alert does) and is left out of its ASN's outage count, like a
+	// path inside an outage; one still down once the tunnel is back is
+	// said then.
+	TunnelDown func() map[uint]bool
 	// Started is since when the window has been fed without a break: the
 	// first poll that worked after the start, or after a poll that did not
 	// or a gap in the panel's buffer (Covered, Lost, Gapped). The window covers no more than the time since, and
@@ -212,6 +226,10 @@ type Detector struct {
 	outages  map[uint32]bool
 	// baselined is the last hour folded into the normals.
 	baselined int64
+	// tunnelSeen is when each node was last held for a broken tunnel
+	// (TunnelDown): its held paths are not said until a window has passed
+	// since, or the window still full of the cut would speak for them.
+	tunnelSeen map[uint]time.Time
 }
 
 func (d *Detector) now() time.Time {
@@ -457,6 +475,25 @@ const stateSeen = "detect_seen"
 // normal against the window, and raises the alerts the changes make.
 func (d *Detector) Evaluate(ctx context.Context) error {
 	now := d.now()
+	tunnelDown := map[uint]bool{}
+	if d.TunnelDown != nil {
+		if m := d.TunnelDown(); m != nil {
+			tunnelDown = m
+		}
+	}
+	d.mu.Lock()
+	if d.tunnelSeen == nil {
+		d.tunnelSeen = map[uint]time.Time{}
+	}
+	for n := range tunnelDown {
+		d.tunnelSeen[n] = now
+	}
+	for n, at := range d.tunnelSeen {
+		if now.Sub(at) >= time.Duration(Buckets)*BucketEvery {
+			delete(d.tunnelSeen, n)
+		}
+	}
+	d.mu.Unlock()
 	// The states first: an hour a path was down in must not be folded
 	// because a restart came between.
 	d.mu.Lock()
@@ -579,7 +616,7 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 		if b.MeanAuthed < minNormal {
 			// Too quiet at this hour to judge; a path already down still
 			// counts as down for its ASN.
-			if st != nil && st.degraded {
+			if st != nil && st.degraded && !tunnelDown[k.Node] {
 				v := view()
 				v.paths++
 				v.degraded++
@@ -609,6 +646,9 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 				changes = append(changes, change{k, false, st.reason, detail})
 			}
 		}
+		if tunnelDown[k.Node] {
+			continue // the tunnel explains it: no evidence about the ASN
+		}
 		v := view()
 		v.paths++
 		v.nodes[k.Node] = true
@@ -621,7 +661,6 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 		asns = append(asns, a)
 	}
 	sort.Slice(asns, func(i, j int) bool { return asns[i] < asns[j] })
-	ended := map[uint32]bool{}
 	for _, asn := range asns {
 		v := byASN[asn]
 		out := len(v.nodes) >= 2 && v.degraded == v.paths
@@ -631,7 +670,6 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 			alerts = append(alerts, Alert{Kind: KindOutage, ASN: asn, At: at, Detail: detailJSON(map[string]float64{"paths": float64(v.paths), "nodes": float64(len(v.nodes))})})
 		case !out && d.outages[asn] && v.degraded*2 < v.paths:
 			delete(d.outages, asn)
-			ended[asn] = true
 			alerts = append(alerts, Alert{Kind: KindOutageEnd, ASN: asn, At: at})
 		}
 	}
@@ -648,8 +686,9 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 	for _, c := range changes {
 		changed[c.k] = true
 		st := d.states[c.k]
-		if c.to && d.outages[c.k.ASN] {
-			continue // the ASN's own alert says it
+		_, tunneled := d.tunnelSeen[c.k.Node]
+		if c.to && (d.outages[c.k.ASN] || tunneled) {
+			continue // the ASN's or the tunnel's own alert says it
 		}
 		if !c.to && !st.alerted {
 			continue // its going down was never said either
@@ -664,12 +703,18 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 			Reason: c.reason, At: at, Detail: detailJSON(c.detail),
 		})
 	}
-	// The ASN is back and some of its paths are not: they were never
-	// alerted (the outage spoke for them), so they are said now.
+	// A path down and never said — an outage or a broken tunnel spoke for
+	// it — whose ASN is back and whose tunnel has worked for a window, and
+	// which still reads bad: it is said now. One reading good is on its way back with the
+	// rest and says nothing. This holds across a restart too, which forgets
+	// which tunnels were down but keeps which paths were not alerted.
 	for _, k := range keys {
 		st := d.states[k]
-		if st == nil || !st.degraded || st.alerted || !ended[k.ASN] || changed[k] {
+		if st == nil || !st.degraded || st.alerted || st.bad == 0 || changed[k] || d.outages[k.ASN] || d.off(k.Node) {
 			continue
+		}
+		if _, held := d.tunnelSeen[k.Node]; held {
+			continue // the tunnel is down, or back for less than a window
 		}
 		st.alerted = true
 		alerts = append(alerts, Alert{

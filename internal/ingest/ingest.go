@@ -86,11 +86,48 @@ type Sample struct {
 	Down         int64             `json:"down"`
 }
 
-// NodeState is one node's telemetry state as the panel reports it.
+// NodeState is one node's telemetry state as the panel reports it, with
+// the shape of what it serves (nx-panel docs/path-telemetry.md P22): an
+// older panel sends no inbounds.
 type NodeState struct {
-	ID    uint   `json:"id"`
-	Name  string `json:"name"`
-	State string `json:"state"`
+	ID       uint    `json:"id"`
+	Name     string  `json:"name"`
+	State    string  `json:"state"`
+	Inbounds []Shape `json:"inbounds,omitempty"`
+}
+
+// Shape is one inbound or listening endpoint a node serves, by the tag its
+// cells carry.
+type Shape struct {
+	Tag       string `json:"tag"`
+	Kind      string `json:"kind"` // inbound | endpoint
+	Type      string `json:"type"`
+	Transport string `json:"transport,omitempty"`
+	Security  string `json:"security,omitempty"`
+	Fronted   bool   `json:"fronted"`
+}
+
+// KindEndpoint is a Shape of a WireGuard, OpenVPN or OpenConnect endpoint.
+// A WireGuard server answers a handshake it cannot authenticate with
+// silence, so its cells count only what got through — handshakes and
+// bytes — never accepted or failed (P27).
+const KindEndpoint = "endpoint"
+
+// TunnelSample is one node's counts for one node-to-node tunnel link since
+// its previous drain (P26), as polled.
+type TunnelSample struct {
+	Cursor      uint64            `json:"cursor"`
+	NodeID      uint              `json:"node_id"`
+	DateTime    int64             `json:"date_time"`
+	Tunnel      string            `json:"tunnel"`
+	Peer        string            `json:"peer"`
+	Server      string            `json:"server"`
+	Side        string            `json:"side"`
+	Attempts    uint32            `json:"attempts"`
+	Up          uint32            `json:"up"`
+	Failed      map[string]uint32 `json:"failed"`
+	Flapped     uint32            `json:"flapped"`
+	LifetimeP50 uint32            `json:"lifetime_p50"`
 }
 
 // A node's state as the panel lists it: StateNodeOn is the one that counts
@@ -119,11 +156,12 @@ func Counting(nodes []NodeState) map[uint]bool {
 }
 
 type page struct {
-	Active  bool        `json:"active"`
-	Cursor  uint64      `json:"cursor"`
-	Gap     bool        `json:"gap"`
-	Samples []Sample    `json:"samples"`
-	Nodes   []NodeState `json:"nodes"`
+	Active  bool           `json:"active"`
+	Cursor  uint64         `json:"cursor"`
+	Gap     bool           `json:"gap"`
+	Samples []Sample       `json:"samples"`
+	Tunnels []TunnelSample `json:"tunnels"`
+	Nodes   []NodeState    `json:"nodes"`
 }
 
 // Status is what the admin web shows about the feed.
@@ -173,6 +211,8 @@ type Ingest struct {
 
 	mu      sync.Mutex
 	pending map[cellKey]*model.PathCounters
+	// tunnels are the tunnel links' counts waiting for the flush.
+	tunnels map[model.TunnelCell]*model.TunnelCounters
 	// known is, per hour and node and inbound, the ASNs that have their own
 	// cell already — in the database or pending — so top-K folding holds
 	// across flushes.
@@ -200,6 +240,25 @@ func (in *Ingest) Status() Status {
 	s.Nodes = append([]NodeState(nil), s.Nodes...)
 	s.Pending = len(in.pending)
 	return s
+}
+
+// Shapes is what each node served as of the last poll, by node and tag;
+// empty before one, or from a panel that does not list it.
+func (in *Ingest) Shapes() map[uint]map[string]Shape {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	out := make(map[uint]map[string]Shape, len(in.status.Nodes))
+	for _, n := range in.status.Nodes {
+		if len(n.Inbounds) == 0 {
+			continue
+		}
+		m := make(map[string]Shape, len(n.Inbounds))
+		for _, sh := range n.Inbounds {
+			m[sh.Tag] = sh
+		}
+		out[n.ID] = m
+	}
+	return out
 }
 
 // Run polls and flushes for the life of ctx, and flushes once more on the
@@ -302,7 +361,8 @@ func (in *Ingest) Poll(ctx context.Context) error {
 		in.mu.Lock()
 		stuck := in.cursor == since
 		in.mu.Unlock()
-		if len(p.Samples) < pageLimit || stuck {
+		// The panel's limit counts the cells and the tunnel links together.
+		if len(p.Samples)+len(p.Tunnels) < pageLimit || stuck {
 			return nil
 		}
 	}
@@ -371,6 +431,25 @@ func (in *Ingest) take(p page) (skewed map[uint]bool) {
 			in.Observe(s.NodeID, s.Inbound, info.ASN, s.Network, one)
 		}
 	}
+	for _, ts := range p.Tunnels {
+		if d := now.Unix() - ts.DateTime; d > maxSampleAge || d < -maxSampleAhead {
+			in.status.Skewed++
+			continue
+		}
+		k := model.TunnelCell{
+			Hour: ts.DateTime - ts.DateTime%3600, NodeID: ts.NodeID,
+			Tunnel: ts.Tunnel, Peer: ts.Peer, Server: ts.Server, Side: ts.Side,
+		}
+		if in.tunnels == nil {
+			in.tunnels = map[model.TunnelCell]*model.TunnelCounters{}
+		}
+		c := in.tunnels[k]
+		if c == nil {
+			c = &model.TunnelCounters{}
+			in.tunnels[k] = c
+		}
+		addTunnel(c, ts)
+	}
 	// The panel's cursor, also when it is behind ours: a panel that
 	// restarted (or another panel, or a restored database) numbers from
 	// somewhere else and answers a cursor it never gave with everything it
@@ -380,6 +459,37 @@ func (in *Ingest) take(p page) (skewed map[uint]bool) {
 		in.cursor = p.Cursor
 	}
 	return skewed
+}
+
+// addTunnel adds one tunnel sample into its hour's counters.
+func addTunnel(c *model.TunnelCounters, s TunnelSample) {
+	c.Attempts += uint64(s.Attempts)
+	c.Up += uint64(s.Up)
+	c.Flapped += uint64(s.Flapped)
+	for class, n := range s.Failed {
+		switch class {
+		case "dial":
+			c.FailedDial += uint64(n)
+		case "tls":
+			c.FailedTLS += uint64(n)
+		case "preface":
+			c.FailedPreface += uint64(n)
+		case "refused":
+			c.FailedRefused += uint64(n)
+		case "timeout":
+			c.FailedTimeout += uint64(n)
+		case "reset":
+			c.FailedReset += uint64(n)
+		case "eof":
+			c.FailedEOF += uint64(n)
+		default:
+			c.FailedOther += uint64(n)
+		}
+	}
+	if s.LifetimeP50 > 0 {
+		c.LifetimeSum += uint64(s.LifetimeP50)
+		c.LifetimeN++
+	}
 }
 
 func add(c *model.PathCounters, s Sample) {
@@ -451,10 +561,10 @@ func (in *Ingest) loadCursor() error {
 // Flush writes the pending cells and the cursor in one transaction.
 func (in *Ingest) Flush(ctx context.Context) error {
 	in.mu.Lock()
-	pending, cursor := in.pending, in.cursor
-	in.pending = nil
+	pending, tunnels, cursor := in.pending, in.tunnels, in.cursor
+	in.pending, in.tunnels = nil, nil
 	in.mu.Unlock()
-	if len(pending) == 0 && !in.loadedCursor() {
+	if len(pending) == 0 && len(tunnels) == 0 && !in.loadedCursor() {
 		return nil
 	}
 	err := in.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -465,6 +575,11 @@ func (in *Ingest) Flush(ctx context.Context) error {
 		for k, c := range folded {
 			row := model.PathHour{Hour: k.hour, PathCell: k.PathCell, PathCounters: *c}
 			if err := UpsertAdd(tx, &row, "hour"); err != nil {
+				return err
+			}
+		}
+		for k, c := range tunnels {
+			if err := upsertTunnel(tx, &model.TunnelHour{TunnelCell: k, TunnelCounters: *c}); err != nil {
 				return err
 			}
 		}
@@ -487,6 +602,16 @@ func (in *Ingest) Flush(ctx context.Context) error {
 				addCounters(have, c)
 			} else {
 				in.pending[k] = c
+			}
+		}
+		if in.tunnels == nil && len(tunnels) > 0 {
+			in.tunnels = map[model.TunnelCell]*model.TunnelCounters{}
+		}
+		for k, c := range tunnels {
+			if have := in.tunnels[k]; have != nil {
+				addTunnelCounters(have, c)
+			} else {
+				in.tunnels[k] = c
 			}
 		}
 		in.mu.Unlock()
@@ -629,6 +754,41 @@ func UpsertAdd(tx *gorm.DB, row any, timeColumn string) error {
 	}
 	cols := []clause.Column{{Name: timeColumn}}
 	for _, c := range []string{"node_id", "inbound", "client_asn", "country", "region", "network", "source_kind"} {
+		cols = append(cols, clause.Column{Name: c})
+	}
+	return tx.Clauses(clause.OnConflict{Columns: cols, DoUpdates: clause.Assignments(set)}).Create(row).Error
+}
+
+func addTunnelCounters(a, b *model.TunnelCounters) {
+	a.Attempts += b.Attempts
+	a.Up += b.Up
+	a.Flapped += b.Flapped
+	a.FailedDial += b.FailedDial
+	a.FailedTLS += b.FailedTLS
+	a.FailedPreface += b.FailedPreface
+	a.FailedRefused += b.FailedRefused
+	a.FailedTimeout += b.FailedTimeout
+	a.FailedReset += b.FailedReset
+	a.FailedEOF += b.FailedEOF
+	a.FailedOther += b.FailedOther
+	a.LifetimeSum += b.LifetimeSum
+	a.LifetimeN += b.LifetimeN
+}
+
+// tunnelColumns are a tunnel hour's additive columns.
+var tunnelColumns = []string{
+	"attempts", "up", "flapped", "failed_dial", "failed_tls", "failed_preface", "failed_refused",
+	"failed_timeout", "failed_reset", "failed_eof", "failed_other", "lifetime_sum", "lifetime_n",
+}
+
+// upsertTunnel inserts a tunnel hour or adds into the row holding its cell.
+func upsertTunnel(tx *gorm.DB, row *model.TunnelHour) error {
+	set := map[string]any{}
+	for _, c := range tunnelColumns {
+		set[c] = gorm.Expr("tunnel_hours." + c + " + excluded." + c)
+	}
+	cols := []clause.Column{}
+	for _, c := range []string{"hour", "node_id", "tunnel", "peer", "server", "side"} {
 		cols = append(cols, clause.Column{Name: c})
 	}
 	return tx.Clauses(clause.OnConflict{Columns: cols, DoUpdates: clause.Assignments(set)}).Create(row).Error

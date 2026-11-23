@@ -60,5 +60,9 @@ func Compact(ctx context.Context, db *gorm.DB, now time.Time) error {
 		}
 	}
 	dayCut := now.UTC().Truncate(24*time.Hour).AddDate(0, 0, -PathDayDays).Unix()
-	return db.WithContext(ctx).Where("day < ?", dayCut).Delete(&model.PathDay{}).Error
+	if err := db.WithContext(ctx).Where("day < ?", dayCut).Delete(&model.PathDay{}).Error; err != nil {
+		return err
+	}
+	tunnelCut := now.UTC().Truncate(time.Hour).AddDate(0, 0, -model.TunnelHourDays).Unix()
+	return db.WithContext(ctx).Where("hour < ?", tunnelCut).Delete(&model.TunnelHour{}).Error
 }

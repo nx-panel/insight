@@ -85,13 +85,15 @@ services:
     networks: { ispb: { ipv4_address: 10.82.0.50 } }
 
   # The traffic: a request through each node every few seconds, from inside
-  # each client's network namespace.
+  # each client's network namespace. A request gives up after four seconds,
+  # as an app does, so a session that carries nothing ends within the five
+  # seconds under which the node counts it as cut early.
   traffica: &traffic
     image: curlimages/curl:latest
     network_mode: "service:clienta"
     entrypoint: ["sh", "-c"]
     command:
-      - 'while true; do for p in 1081 1082; do curl -s -o /dev/null -m 8 -x socks5h://127.0.0.1:$$p http://10.80.0.5/index.html; done; sleep 5; done'
+      - 'while true; do for p in 1081 1082; do curl -s -o /dev/null -m 4 -x socks5h://127.0.0.1:$$p http://10.80.0.5/index.html; done; sleep 5; done'
   trafficb:
     <<: *traffic
     network_mode: "service:clientb"

@@ -41,6 +41,20 @@ func TestTextInEveryLanguage(t *testing.T) {
 	if got := Text(detect.Alert{Kind: detect.KindProbed, Detail: `{"score":40,"replayed":2,"followUpFail":3,"followNormal":2}`}, names, "en"); strings.Contains(got, "surge") {
 		t.Errorf("a follow-up count under the surge was given as evidence: %q", got)
 	}
+	down := detect.Alert{Kind: detect.KindTunnelDown, NodeID: 1, Tunnel: "to-de<x>", Detail: `{"tunnelId":3,"origins":["de-1","nl-2"],"unreachable":["nl-2"]}`}
+	up := detect.Alert{Kind: detect.KindTunnelUp, NodeID: 1, Tunnel: "to-de", Detail: `{"tunnelId":3,"origins":["de-1"]}`}
+	for _, lang := range []string{"en", "fa", "ru", "zh"} {
+		got := Text(down, names, lang)
+		if !strings.Contains(got, "to-de&lt;x&gt;") || !strings.Contains(got, "fsn&lt;1&gt;") || !strings.Contains(got, "de-1, nl-2") || strings.Count(got, "nl-2") != 2 {
+			t.Errorf("%s tunnel.down: %q", lang, got)
+		}
+		if got := Text(up, names, lang); !strings.Contains(got, "to-de") || !strings.Contains(got, "de-1") || strings.Contains(got, "%!") {
+			t.Errorf("%s tunnel.up: %q", lang, got)
+		}
+		if strings.Contains(got, "%!") {
+			t.Errorf("%s tunnel.down has a bad verb: %q", lang, got)
+		}
+	}
 	if !strings.Contains(Text(a, names, "fa"), "مختل") {
 		t.Error("fa is not Persian")
 	}

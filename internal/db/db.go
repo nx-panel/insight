@@ -18,6 +18,7 @@ import (
 	"github.com/nx-panel/insight/internal/config"
 	"github.com/nx-panel/insight/internal/detect"
 	"github.com/nx-panel/insight/internal/model"
+	"github.com/nx-panel/insight/internal/tunnels"
 )
 
 // cellColumns is a path cell's identity, the unique key both path tables
@@ -63,7 +64,8 @@ func Open(c config.Config) (*gorm.DB, error) {
 
 // Migrate creates the tables and the cell indexes.
 func Migrate(gdb *gorm.DB) error {
-	if err := gdb.AutoMigrate(append(append(model.All(), detect.Tables()...), ai.Tables()...)...); err != nil {
+	tables := append(append(append(model.All(), detect.Tables()...), ai.Tables()...), tunnels.Tables()...)
+	if err := gdb.AutoMigrate(tables...); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
 	for _, stmt := range []string{

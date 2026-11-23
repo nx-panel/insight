@@ -13,6 +13,7 @@ import (
 
 	"github.com/nx-panel/insight/internal/detect"
 	"github.com/nx-panel/insight/internal/model"
+	"github.com/nx-panel/insight/internal/tunnels"
 )
 
 // When passes run (§4.8: event-driven beyond the daily pass).
@@ -73,6 +74,9 @@ type Runner struct {
 	Countries []string
 	Client    *Client
 	Now       func() time.Time
+	// Tunnels is the tunnels as last polled (internal/tunnels), nil for
+	// none.
+	Tunnels func() []tunnels.View
 
 	running sync.Mutex
 	mu      sync.Mutex
@@ -237,7 +241,11 @@ func (r *Runner) pass(ctx context.Context, country, trigger string) (Report, err
 	if held {
 		return rep, nil
 	}
-	t, err := Build(ctx, r.DB, r.State, r.Org, country, now)
+	var tun []tunnels.View
+	if r.Tunnels != nil {
+		tun = r.Tunnels()
+	}
+	t, err := Build(ctx, r.DB, r.State, r.Org, country, now, tun)
 	if err != nil {
 		return rep, err
 	}

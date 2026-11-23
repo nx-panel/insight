@@ -594,3 +594,81 @@ func TestAShortRestartBlindsNothing(t *testing.T) {
 		t.Fatal("a ten-minute restart kept its hour from the normals")
 	}
 }
+
+// TestABrokenTunnelSpeaksForItsRelay is PT16's done_when on the detector:
+// with a relay's tunnel down, every network failing on that relay raises no
+// path.degraded and no asn.outage — the tunnel's own alert says it — while
+// the paths still read degraded for the hints; a path still down once the
+// tunnel is back is said then, and one that came back with it says nothing.
+func TestABrokenTunnelSpeaksForItsRelay(t *testing.T) {
+	gdb := openDB(t)
+	c := &clock{time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)}
+	down := map[uint]bool{1: true}
+	d := &detect.Detector{DB: gdb, Now: c.now, Started: c.t, TunnelDown: func() map[uint]bool { return down }}
+	relay := []detect.Key{
+		{Node: 1, Inbound: "a", ASN: 44244, Network: "tcp"},
+		{Node: 1, Inbound: "a", ASN: 58224, Network: "tcp"},
+		{Node: 1, Inbound: "b", ASN: 44244, Network: "tcp"},
+	}
+	other := detect.Key{Node: 2, Inbound: "a", ASN: 44244, Network: "tcp"}
+	for _, k := range append(relay, other) {
+		normal(gdb, t, k)
+	}
+	eval := func(working map[detect.Key]bool) {
+		t.Helper()
+		for range detect.Buckets {
+			for _, k := range append(relay, other) {
+				if working[k] {
+					traffic(d, k, 11, 10, 0)
+				}
+			}
+			c.step(detect.BucketEvery)
+		}
+		if err := d.Evaluate(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Every network on the relay drops; the other node is fine.
+	cut := map[detect.Key]bool{other: true}
+	eval(cut)
+	eval(cut)
+	if got := kinds(t, gdb); len(got) != 0 {
+		t.Fatalf("a broken tunnel raised %v", got)
+	}
+	for _, k := range relay {
+		if !d.Degraded()[k] {
+			t.Fatalf("%v is not degraded: the hints would keep its users on it", k)
+		}
+	}
+	// The tunnel comes back; one path stays down (its inbound is blocked
+	// too), the others work again. An evaluation whose window still holds
+	// the cut says nothing of any of them.
+	down = map[uint]bool{}
+	healed := map[detect.Key]bool{other: true, relay[1]: true, relay[2]: true}
+	for range detect.Buckets - 1 {
+		for _, k := range []detect.Key{other, relay[1], relay[2]} {
+			traffic(d, k, 11, 10, 0)
+		}
+		c.step(detect.BucketEvery)
+	}
+	if err := d.Evaluate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := kinds(t, gdb); len(got) != 0 {
+		t.Fatalf("a window still full of the cut spoke: %v", got)
+	}
+	eval(healed)
+	got := kinds(t, gdb)
+	if len(got) != 1 || got[0] != detect.KindDegraded {
+		t.Fatalf("after the tunnel came back: %v", got)
+	}
+	var a detect.Alert
+	gdb.First(&a)
+	if a.NodeID != 1 || a.Inbound != "a" || a.ASN != 44244 {
+		t.Fatalf("said %+v, want the path still down", a)
+	}
+	eval(healed)
+	if got := kinds(t, gdb); len(got) != 1 {
+		t.Fatalf("the paths that came back with the tunnel said something: %v", got)
+	}
+}

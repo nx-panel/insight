@@ -12,6 +12,7 @@ import (
 
 	"github.com/nx-panel/insight/internal/detect"
 	"github.com/nx-panel/insight/internal/model"
+	"github.com/nx-panel/insight/internal/tunnels"
 )
 
 const (
@@ -39,6 +40,22 @@ type Path struct {
 	Replayed                                uint64
 	RTTMs                                   uint64
 	Degraded                                bool
+	// Endpoint is a WireGuard endpoint's path: it counts the handshakes
+	// that worked and never one that failed (a WireGuard server answers
+	// none), so Accepted is its handshakes and Success and Fail are
+	// unknown (-1). Read off the numbers: an inbound accepts every
+	// connection it authenticates, so only an endpoint has authenticated
+	// sessions and nothing accepted.
+	Endpoint bool
+}
+
+// TunnelRow is one node-to-node tunnel (P26): the relay users connect to,
+// the origins it carries them to, and whether it has no link now.
+type TunnelRow struct {
+	Name    string
+	Relay   uint
+	Origins []uint
+	Down    bool
 }
 
 // HostNode is a node as the model sees it: its id and where it is hosted,
@@ -58,6 +75,19 @@ type Table struct {
 	Outages []uint32
 	Probed  []detect.Suspicion
 	Alerts  map[string]int
+	Tunnels []TunnelRow
+}
+
+// cut is the relays of the tunnels that are down: their paths drop because
+// of the tunnel, and nothing about their inbounds or address is blocked.
+func (t Table) cut() map[uint]bool {
+	out := map[uint]bool{}
+	for _, tr := range t.Tunnels {
+		if tr.Down {
+			out[tr.Relay] = true
+		}
+	}
+	return out
 }
 
 // State is what the detector knows now.
@@ -66,8 +96,9 @@ type State interface {
 	Outages() map[uint32]bool
 }
 
-// Build reads the last Window of country's paths.
-func Build(ctx context.Context, gdb *gorm.DB, st State, org func(uint32) string, country string, now time.Time) (Table, error) {
+// Build reads the last Window of country's paths; tun is the tunnels as
+// the watcher last saw them.
+func Build(ctx context.Context, gdb *gorm.DB, st State, org func(uint32) string, country string, now time.Time, tun []tunnels.View) (Table, error) {
 	t := Table{Country: country, At: now, Alerts: map[string]int{}}
 	since := now.Add(-Window).Truncate(time.Hour).Unix()
 	type row struct {
@@ -89,8 +120,8 @@ func Build(ctx context.Context, gdb *gorm.DB, st State, org func(uint32) string,
 		// and 0 in a finding means "every network". The traffic floor is
 		// applied before the cut to MaxRows, not after it.
 		Where("hour >= ? AND country = ? AND client_asn <> ?", since, country, detect.OtherASN).
-		Group("client_asn, node_id, inbound, network").Having("SUM(accepted) >= ?", minAccepted).
-		Order("accepted DESC").Limit(MaxRows).
+		Group("client_asn, node_id, inbound, network").Having("SUM(accepted) >= ? OR SUM(authed) >= ?", minAccepted, minAccepted).
+		Order("SUM(accepted) + SUM(authed) DESC").Limit(MaxRows).
 		Scan(&rows).Error; err != nil {
 		return t, err
 	}
@@ -108,7 +139,8 @@ func Build(ctx context.Context, gdb *gorm.DB, st State, org func(uint32) string,
 	}
 	nodes, asns := map[uint]bool{}, map[uint32]bool{}
 	for _, r := range rows {
-		if r.Accepted < minAccepted {
+		endpoint := r.Accepted == 0 && r.Authed > 0
+		if r.Accepted < minAccepted && (!endpoint || r.Authed < minAccepted) {
 			continue
 		}
 		k := detect.Key{Node: r.NodeID, Inbound: r.Inbound, ASN: r.ClientASN, Network: r.Network}
@@ -116,6 +148,9 @@ func Build(ctx context.Context, gdb *gorm.DB, st State, org func(uint32) string,
 			ASN: r.ClientASN, Node: r.NodeID, Inbound: r.Inbound, Network: r.Network, Accepted: r.Accepted,
 			Success: pct(r.Authed, r.Accepted), Fail: pct(r.Failed, r.Accepted), Early: pct(r.EarlyClose, max(r.Authed, 1)),
 			NormalFail: -1, NormalEarly: -1, Replayed: r.Replay, Degraded: degraded[k],
+		}
+		if endpoint {
+			p.Endpoint, p.Accepted, p.Success, p.Fail = true, r.Authed, -1, -1
 		}
 		if org != nil {
 			p.Org = org(r.ClientASN)
@@ -125,12 +160,24 @@ func Build(ctx context.Context, gdb *gorm.DB, st State, org func(uint32) string,
 		}
 		if b, ok := normals[k]; ok && b.N > 0 {
 			p.NormalFail, p.NormalEarly = int(b.MeanFail*100+0.5), int(b.MeanEarly*100+0.5)
+			if p.Endpoint {
+				p.NormalFail = -1
+			}
 		}
 		t.Paths = append(t.Paths, p)
 		nodes[r.NodeID], asns[r.ClientASN] = true, true
 	}
 	if len(t.Paths) == 0 {
 		return t, nil
+	}
+	for _, v := range tun {
+		touches := nodes[v.RelayID]
+		for _, o := range v.OriginIDs {
+			touches = touches || nodes[o]
+		}
+		if v.Enabled && touches {
+			t.Tunnels = append(t.Tunnels, TunnelRow{Name: v.Name, Relay: v.RelayID, Origins: v.OriginIDs, Down: v.State == tunnels.Down})
+		}
 	}
 	var infos []model.NodeNetinfo
 	if err := tx.Find(&infos).Error; err != nil {
@@ -166,7 +213,8 @@ func Build(ctx context.Context, gdb *gorm.DB, st State, org func(uint32) string,
 		return t, err
 	}
 	for _, a := range alerts {
-		if asns[a.ASN] || (a.Kind == detect.KindProbed && nodes[a.NodeID]) {
+		tunnel := a.Kind == detect.KindTunnelDown || a.Kind == detect.KindTunnelUp
+		if (asns[a.ASN] && !tunnel) || ((a.Kind == detect.KindProbed || tunnel) && nodes[a.NodeID]) {
 			t.Alerts[a.Kind]++
 		}
 	}
@@ -189,19 +237,35 @@ func (t Table) Text() string {
 	for _, n := range t.Nodes {
 		fmt.Fprintf(&b, "%d|%s|%s\n", n.ID, n.Country, clean(n.Org))
 	}
-	b.WriteString("\n# paths: asn|org|node|inbound|net|accepted|success%|fail%|normal_fail%|early_close%|normal_early%|replayed|rtt_ms|state\n")
+	b.WriteString("\n# paths: asn|org|node|inbound|net|accepted|success%|fail%|normal_fail%|early_close%|normal_early%|replayed|rtt_ms|state|kind\n")
 	for _, p := range t.Paths {
 		state := "ok"
 		if p.Degraded {
 			state = "degraded"
 		}
-		fmt.Fprintf(&b, "%d|%s|%d|%s|%s|%d|%d|%d|%s|%d|%s|%d|%d|%s\n",
-			p.ASN, clean(p.Org), p.Node, clean(p.Inbound), p.Network, p.Accepted, p.Success, p.Fail,
-			normal(p.NormalFail), p.Early, normal(p.NormalEarly), p.Replayed, p.RTTMs, state)
+		kind := "inbound"
+		if p.Endpoint {
+			kind = "endpoint"
+		}
+		fmt.Fprintf(&b, "%d|%s|%d|%s|%s|%d|%s|%s|%s|%d|%s|%d|%d|%s|%s\n",
+			p.ASN, clean(p.Org), p.Node, clean(p.Inbound), p.Network, p.Accepted, normal(p.Success), normal(p.Fail),
+			normal(p.NormalFail), p.Early, normal(p.NormalEarly), p.Replayed, p.RTTMs, state, kind)
 	}
 	b.WriteString("\n# asn_outages_now: asn\n")
 	for _, a := range t.Outages {
 		fmt.Fprintf(&b, "%d\n", a)
+	}
+	b.WriteString("\n# tunnels: tunnel|relay_node|origin_nodes|state\n")
+	for _, tr := range t.Tunnels {
+		state := "up"
+		if tr.Down {
+			state = "down"
+		}
+		origins := make([]string, 0, len(tr.Origins))
+		for _, o := range tr.Origins {
+			origins = append(origins, fmt.Sprint(o))
+		}
+		fmt.Fprintf(&b, "%s|%d|%s|%s\n", clean(tr.Name), tr.Relay, strings.Join(origins, " "), state)
 	}
 	b.WriteString("\n# probed_endpoints: node|inbound|score|replayed_6h|follow_up_fail_6h\n")
 	for _, s := range t.Probed {

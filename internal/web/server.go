@@ -26,6 +26,7 @@ import (
 	"github.com/nx-panel/insight/internal/ingest"
 	"github.com/nx-panel/insight/internal/model"
 	"github.com/nx-panel/insight/internal/netinfo"
+	"github.com/nx-panel/insight/internal/tunnels"
 )
 
 const sessionCookie = "nx_insight_session"
@@ -43,6 +44,7 @@ type Server struct {
 	detect    *detect.Detector
 	net       *netinfo.DB
 	ai        *ai.Runner
+	tunnels   *tunnels.Watcher
 	countries []string
 
 	mu      sync.Mutex
@@ -66,6 +68,8 @@ type Parts struct {
 	// AI is Mode A's runner, Countries the client countries it reads.
 	AI        *ai.Runner
 	Countries []string
+	// Tunnels is the tunnel watcher (P26), nil for none.
+	Tunnels *tunnels.Watcher
 }
 
 // New wires the server; spa is the built admin web, nil for none.
@@ -74,7 +78,7 @@ func New(gdb *gorm.DB, a *addon.Addon, cfg config.Config, version string, spa fs
 		db: gdb, addon: a, cfg: cfg, version: version, spa: spa,
 		logins:  auth.NewLimiter(5, 10*time.Minute),
 		pending: map[string]pendingLogin{}, enrol: map[uint]string{},
-		ingest: p.Ingest, detect: p.Detect, net: p.Net, ai: p.AI, countries: p.Countries,
+		ingest: p.Ingest, detect: p.Detect, net: p.Net, ai: p.AI, tunnels: p.Tunnels, countries: p.Countries,
 	}
 	proxies, err := web.ParseProxies(cfg.TrustedProxies)
 	if err != nil {

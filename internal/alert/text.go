@@ -15,56 +15,69 @@ type phrases struct {
 	outage, outageEnd, degraded, recovered string
 	failures, drop, early                  string
 	probed, replays, follow                string
+	tunnelDown, tunnelUp, unreachable      string
 }
 
 var languages = map[string]phrases{
 	"en": {
-		outage:    "⛔ <b>%s is cut off</b>: every path to it is down on %.0f nodes at once. Probably a shutdown or a whitelist on that network, not a block of your nodes — nothing to rotate.",
-		outageEnd: "✅ <b>%s is back</b>: its paths work again.",
-		degraded:  "🔴 <b>Path degraded</b>: %s → %s %s/%s. %s",
-		recovered: "🟢 <b>Path recovered</b>: %s → %s %s/%s.",
-		failures:  "%.0f%% of connections fail the handshake (normally %.0f%%).",
-		drop:      "%.0f connections an hour get through (normally %.0f).",
-		early:     "%.0f%% of sessions are cut within seconds (normally %.0f%%).",
-		probed:    "🕵️ <b>Endpoint probed</b>: %s %s (score %.0f). %s Consider rotating it before it is blocked: a new port or SNI, or another address for the node.",
-		replays:   "%.0f replayed handshakes in 6 hours — a real client never sends one handshake twice.",
-		follow:    "A surge of failed handshakes right after real users' sessions (%.0f, normally %.0f).",
+		outage:      "⛔ <b>%s is cut off</b>: every path to it is down on %.0f nodes at once. Probably a shutdown or a whitelist on that network, not a block of your nodes — nothing to rotate.",
+		outageEnd:   "✅ <b>%s is back</b>: its paths work again.",
+		degraded:    "🔴 <b>Path degraded</b>: %s → %s %s/%s. %s",
+		recovered:   "🟢 <b>Path recovered</b>: %s → %s %s/%s.",
+		failures:    "%.0f%% of connections fail the handshake (normally %.0f%%).",
+		drop:        "%.0f connections an hour get through (normally %.0f).",
+		early:       "%.0f%% of sessions are cut within seconds (normally %.0f%%).",
+		probed:      "🕵️ <b>Endpoint probed</b>: %s %s (score %.0f). %s Consider rotating it before it is blocked: a new port or SNI, or another address for the node.",
+		replays:     "%.0f replayed handshakes in 6 hours — a real client never sends one handshake twice.",
+		follow:      "A surge of failed handshakes right after real users' sessions (%.0f, normally %.0f).",
+		tunnelDown:  "🔌 <b>Tunnel down</b>: %s — %s has no link to %s. Users who go out through it are cut off; their paths on %s drop because of the tunnel, not a block of its inbounds — nothing to rotate there. %s",
+		tunnelUp:    "🔗 <b>Tunnel back</b>: %s — %s is linked to %s again.",
+		unreachable: "The panel cannot reach %s either: that node may be down.",
 	},
 	"fa": {
-		outage:    "⛔ <b>%s قطع است</b>: همهٔ مسیرها به آن هم\u200cزمان روی %.0f نود از کار افتاده\u200cاند. احتمالاً قطع اینترنت یا لیست سفید روی همان شبکه است، نه مسدود شدن نودهای شما — چیزی برای چرخاندن نیست.",
-		outageEnd: "✅ <b>%s برگشت</b>: مسیرهایش دوباره کار می\u200cکنند.",
-		degraded:  "🔴 <b>مسیر مختل شد</b>: %s ← %s %s/%s. %s",
-		recovered: "🟢 <b>مسیر برگشت</b>: %s ← %s %s/%s.",
-		failures:  "%.0f٪ اتصال\u200cها در handshake رد می\u200cشوند (معمولاً %.0f٪).",
-		drop:      "ساعتی %.0f اتصال می\u200cرسد (معمولاً %.0f).",
-		early:     "%.0f٪ جلسه\u200cها در چند ثانیه قطع می\u200cشوند (معمولاً %.0f٪).",
-		probed:    "🕵️ <b>نقطهٔ اتصال زیر پروب</b>: %s %s (امتیاز %.0f). %s پیش از آنکه مسدود شود، عوض کردنش را در نظر بگیرید: پورت یا SNI تازه، یا آدرس دیگری برای نود.",
-		replays:   "%.0f handshake تکراری در ۶ ساعت — کلاینت واقعی هیچ\u200cوقت یک handshake را دو بار نمی\u200cفرستد.",
-		follow:    "موجی از handshakeهای ناموفق درست پس از جلسه\u200cهای کاربران واقعی (%.0f، معمولاً %.0f).",
+		outage:      "⛔ <b>%s قطع است</b>: همهٔ مسیرها به آن هم\u200cزمان روی %.0f نود از کار افتاده\u200cاند. احتمالاً قطع اینترنت یا لیست سفید روی همان شبکه است، نه مسدود شدن نودهای شما — چیزی برای چرخاندن نیست.",
+		outageEnd:   "✅ <b>%s برگشت</b>: مسیرهایش دوباره کار می\u200cکنند.",
+		degraded:    "🔴 <b>مسیر مختل شد</b>: %s ← %s %s/%s. %s",
+		recovered:   "🟢 <b>مسیر برگشت</b>: %s ← %s %s/%s.",
+		failures:    "%.0f٪ اتصال\u200cها در handshake رد می\u200cشوند (معمولاً %.0f٪).",
+		drop:        "ساعتی %.0f اتصال می\u200cرسد (معمولاً %.0f).",
+		early:       "%.0f٪ جلسه\u200cها در چند ثانیه قطع می\u200cشوند (معمولاً %.0f٪).",
+		probed:      "🕵️ <b>نقطهٔ اتصال زیر پروب</b>: %s %s (امتیاز %.0f). %s پیش از آنکه مسدود شود، عوض کردنش را در نظر بگیرید: پورت یا SNI تازه، یا آدرس دیگری برای نود.",
+		replays:     "%.0f handshake تکراری در ۶ ساعت — کلاینت واقعی هیچ\u200cوقت یک handshake را دو بار نمی\u200cفرستد.",
+		follow:      "موجی از handshakeهای ناموفق درست پس از جلسه\u200cهای کاربران واقعی (%.0f، معمولاً %.0f).",
+		tunnelDown:  "🔌 <b>تانل قطع شد</b>: %s — %s به %s لینکی ندارد. کاربرانی که از راه آن بیرون می\u200cروند قطع\u200cاند؛ مسیرهایشان روی %s به خاطر تانل افت کرده، نه مسدود شدن inboundهایش — آنجا چیزی برای چرخاندن نیست. %s",
+		tunnelUp:    "🔗 <b>تانل برگشت</b>: %s — %s دوباره به %s لینک دارد.",
+		unreachable: "پنل به %s هم دسترسی ندارد: شاید آن نود خاموش باشد.",
 	},
 	"ru": {
-		outage:    "⛔ <b>%s отрезан</b>: все пути к нему не работают одновременно на %.0f узлах. Скорее всего, отключение или белый список в этой сети, а не блокировка ваших узлов — менять нечего.",
-		outageEnd: "✅ <b>%s снова доступен</b>: его пути работают.",
-		degraded:  "🔴 <b>Путь деградировал</b>: %s → %s %s/%s. %s",
-		recovered: "🟢 <b>Путь восстановлен</b>: %s → %s %s/%s.",
-		failures:  "%.0f%% соединений не проходят рукопожатие (обычно %.0f%%).",
-		drop:      "Проходит %.0f соединений в час (обычно %.0f).",
-		early:     "%.0f%% сессий обрываются за секунды (обычно %.0f%%).",
-		probed:    "🕵️ <b>Точку подключения зондируют</b>: %s %s (оценка %.0f). %s Подумайте о смене до блокировки: новый порт или SNI либо другой адрес узла.",
-		replays:   "%.0f повторённых рукопожатий за 6 часов — настоящий клиент никогда не отправляет одно рукопожатие дважды.",
-		follow:    "Всплеск неудачных рукопожатий сразу после сессий настоящих пользователей (%.0f, обычно %.0f).",
+		outage:      "⛔ <b>%s отрезан</b>: все пути к нему не работают одновременно на %.0f узлах. Скорее всего, отключение или белый список в этой сети, а не блокировка ваших узлов — менять нечего.",
+		outageEnd:   "✅ <b>%s снова доступен</b>: его пути работают.",
+		degraded:    "🔴 <b>Путь деградировал</b>: %s → %s %s/%s. %s",
+		recovered:   "🟢 <b>Путь восстановлен</b>: %s → %s %s/%s.",
+		failures:    "%.0f%% соединений не проходят рукопожатие (обычно %.0f%%).",
+		drop:        "Проходит %.0f соединений в час (обычно %.0f).",
+		early:       "%.0f%% сессий обрываются за секунды (обычно %.0f%%).",
+		probed:      "🕵️ <b>Точку подключения зондируют</b>: %s %s (оценка %.0f). %s Подумайте о смене до блокировки: новый порт или SNI либо другой адрес узла.",
+		replays:     "%.0f повторённых рукопожатий за 6 часов — настоящий клиент никогда не отправляет одно рукопожатие дважды.",
+		follow:      "Всплеск неудачных рукопожатий сразу после сессий настоящих пользователей (%.0f, обычно %.0f).",
+		tunnelDown:  "🔌 <b>Туннель упал</b>: %s — у %s нет связи с %s. Пользователи, выходящие через него, отрезаны; их пути на %s падают из-за туннеля, а не из-за блокировки его входящих — менять там нечего. %s",
+		tunnelUp:    "🔗 <b>Туннель восстановлен</b>: %s — %s снова связан с %s.",
+		unreachable: "Панель не может связаться и с %s: возможно, этот узел не работает.",
 	},
 	"zh": {
-		outage:    "⛔ <b>%s 已被切断</b>：到它的所有路径同时在 %.0f 个节点上中断。很可能是该网络断网或启用白名单，而不是您的节点被封锁——无需轮换。",
-		outageEnd: "✅ <b>%s 已恢复</b>：其路径重新可用。",
-		degraded:  "🔴 <b>路径受阻</b>：%s → %s %s/%s。%s",
-		recovered: "🟢 <b>路径已恢复</b>：%s → %s %s/%s。",
-		failures:  "%.0f%% 的连接握手失败（通常为 %.0f%%）。",
-		drop:      "每小时有 %.0f 个连接通过（通常为 %.0f）。",
-		early:     "%.0f%% 的会话在几秒内被切断（通常为 %.0f%%）。",
-		probed:    "🕵️ <b>端点正被探测</b>：%s %s（评分 %.0f）。%s 建议在被封锁前更换：新的端口或 SNI，或为节点换一个地址。",
-		replays:   "6 小时内有 %.0f 次重放握手——真实客户端从不会把同一个握手发送两次。",
-		follow:    "真实用户会话之后紧接着出现大量失败握手（%.0f 次，通常为 %.0f 次）。",
+		outage:      "⛔ <b>%s 已被切断</b>：到它的所有路径同时在 %.0f 个节点上中断。很可能是该网络断网或启用白名单，而不是您的节点被封锁——无需轮换。",
+		outageEnd:   "✅ <b>%s 已恢复</b>：其路径重新可用。",
+		degraded:    "🔴 <b>路径受阻</b>：%s → %s %s/%s。%s",
+		recovered:   "🟢 <b>路径已恢复</b>：%s → %s %s/%s。",
+		failures:    "%.0f%% 的连接握手失败（通常为 %.0f%%）。",
+		drop:        "每小时有 %.0f 个连接通过（通常为 %.0f）。",
+		early:       "%.0f%% 的会话在几秒内被切断（通常为 %.0f%%）。",
+		probed:      "🕵️ <b>端点正被探测</b>：%s %s（评分 %.0f）。%s 建议在被封锁前更换：新的端口或 SNI，或为节点换一个地址。",
+		replays:     "6 小时内有 %.0f 次重放握手——真实客户端从不会把同一个握手发送两次。",
+		follow:      "真实用户会话之后紧接着出现大量失败握手（%.0f 次，通常为 %.0f 次）。",
+		tunnelDown:  "🔌 <b>隧道中断</b>：%s — %s 与 %s 之间没有链路。经由它出网的用户已断开；他们在 %s 上的路径下降是隧道造成的，而不是其入站被封锁——那里无需轮换。%s",
+		tunnelUp:    "🔗 <b>隧道已恢复</b>：%s — %s 与 %s 重新连通。",
+		unreachable: "面板也无法连接 %s：该节点可能已宕机。",
 	},
 }
 
@@ -86,9 +99,28 @@ func Text(a detect.Alert, n Names, lang string) string {
 			node = name
 		}
 	}
+	e := html.EscapeString
+	if a.Kind == detect.KindTunnelDown || a.Kind == detect.KindTunnelUp {
+		var td struct {
+			Origins     []string `json:"origins"`
+			Unreachable []string `json:"unreachable"`
+		}
+		_ = json.Unmarshal([]byte(a.Detail), &td)
+		origins := strings.Join(td.Origins, ", ")
+		if origins == "" {
+			origins = "—"
+		}
+		if a.Kind == detect.KindTunnelUp {
+			return fmt.Sprintf(p.tunnelUp, e(a.Tunnel), e(node), e(origins))
+		}
+		why := ""
+		if len(td.Unreachable) > 0 {
+			why = fmt.Sprintf(p.unreachable, e(strings.Join(td.Unreachable, ", ")))
+		}
+		return strings.TrimSpace(fmt.Sprintf(p.tunnelDown, e(a.Tunnel), e(node), e(origins), e(node), why))
+	}
 	var d map[string]float64
 	_ = json.Unmarshal([]byte(a.Detail), &d)
-	e := html.EscapeString
 	switch a.Kind {
 	case detect.KindOutage:
 		return fmt.Sprintf(p.outage, e(asn), d["nodes"])

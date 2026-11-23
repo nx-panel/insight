@@ -63,6 +63,8 @@ func netDB(t *testing.T) *netinfo.DB {
 type fakePanel struct {
 	mu      sync.Mutex
 	samples []Sample
+	tunnels []TunnelSample
+	shapes  []NodeState
 	nodes   []panelNode
 	asked   []string
 	status  int
@@ -80,11 +82,17 @@ func (f *fakePanel) Get(_ context.Context, path string, out any) error {
 	case strings.HasPrefix(path, "/telemetry/paths"):
 		var since uint64
 		fmt.Sscanf(path[strings.Index(path, "since=")+6:], "%d", &since)
-		p := page{Active: true, Samples: []Sample{}, Cursor: since}
+		p := page{Active: true, Samples: []Sample{}, Cursor: since, Nodes: f.shapes}
 		for _, s := range f.samples {
 			if s.Cursor > since {
 				p.Samples = append(p.Samples, s)
 				p.Cursor = s.Cursor
+			}
+		}
+		for _, s := range f.tunnels {
+			if s.Cursor > since {
+				p.Tunnels = append(p.Tunnels, s)
+				p.Cursor = max(p.Cursor, s.Cursor)
 			}
 		}
 		body = p
@@ -530,5 +538,81 @@ func TestCountingIsTheNodesListedOn(t *testing.T) {
 	}
 	if got := Counting([]NodeState{}); got == nil || len(got) != 0 {
 		t.Fatalf("an empty list = %v, want every node off", got)
+	}
+}
+
+// TestTunnelLinksAndShapesAreRead is PT16's ingest half: the tunnel links
+// the panel relays become hourly tunnel rows, added up across polls, and
+// the shapes it lists are what Shapes answers.
+func TestTunnelLinksAndShapesAreRead(t *testing.T) {
+	gdb := openDB(t)
+	if dsn := os.Getenv("NX_INSIGHT_PG_DSN"); dsn != "" {
+		// The upsert's SQL on PostgreSQL too.
+		var err error
+		if gdb, err = db.Open(config.Config{Driver: config.DriverPostgres, DSN: dsn}); err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range model.All() {
+			gdb.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(m)
+		}
+	}
+	fp := &fakePanel{shapes: []NodeState{{ID: 3, State: StateNodeOn, Inbounds: []Shape{
+		{Tag: "wg-server", Kind: KindEndpoint, Type: "wireguard"},
+		{Tag: "vless", Kind: "inbound", Type: "vless", Transport: "ws", Security: "tls", Fronted: true},
+	}}}}
+	in := &Ingest{Now: atHour, DB: gdb, Net: netDB(t), Panel: func() Getter { return fp }}
+	link := func(cursor uint64, failed map[string]uint32) TunnelSample {
+		return TunnelSample{
+			Cursor: cursor, NodeID: 3, DateTime: hour + 60, Tunnel: "tunnel-to-de", Peer: "de-1", Server: "198.51.100.7:443",
+			Side: "dial", Attempts: 3, Up: 1, Failed: failed, Flapped: 1, LifetimeP50: 30,
+		}
+	}
+	fp.tunnels = []TunnelSample{link(1, map[string]uint32{"dial": 1, "timeout": 1})}
+	if err := in.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	fp.tunnels = append(fp.tunnels, link(2, map[string]uint32{"preface": 2}))
+	if err := in.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := in.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var rows []model.TunnelHour
+	if err := gdb.Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %+v", rows)
+	}
+	r := rows[0]
+	if r.Hour != hour || r.Tunnel != "tunnel-to-de" || r.Peer != "de-1" || r.Attempts != 6 || r.Up != 2 ||
+		r.FailedDial != 1 || r.FailedTimeout != 1 || r.FailedPreface != 2 || r.Flapped != 2 || r.LifetimeN != 2 || r.Failed() != 4 {
+		t.Fatalf("row = %+v", r)
+	}
+	// A second flush adds into the same row.
+	fp.tunnels = append(fp.tunnels, link(3, nil))
+	if err := in.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := in.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	gdb.First(&r)
+	if r.Attempts != 9 {
+		t.Fatalf("attempts after a second flush = %d", r.Attempts)
+	}
+	sh := in.Shapes()
+	if sh[3]["wg-server"].Kind != KindEndpoint || !sh[3]["vless"].Fronted || len(sh) != 1 {
+		t.Fatalf("shapes = %+v", sh)
+	}
+	// Retention drops them after TunnelHourDays.
+	if err := Compact(t.Context(), gdb, time.Unix(hour, 0).AddDate(0, 0, model.TunnelHourDays+1)); err != nil {
+		t.Fatal(err)
+	}
+	var n int64
+	gdb.Model(&model.TunnelHour{}).Count(&n)
+	if n != 0 {
+		t.Fatalf("%d tunnel rows outlived their retention", n)
 	}
 }

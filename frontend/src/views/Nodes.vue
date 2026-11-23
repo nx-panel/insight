@@ -10,8 +10,8 @@ import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
 import Tag from 'primevue/tag'
 import Message from 'primevue/message'
-import { api, type NodeInfo, type Override } from '../api'
-import { when } from '../format'
+import { api, type NodeInfo, type Override, type Shape, type TunnelOnNode } from '../api'
+import { num, when } from '../format'
 
 const { t } = useI18n()
 const toast = useToast()
@@ -64,6 +64,40 @@ function clear() {
   form.value = { asn: 0, org: '', country: '', city: '' }
 }
 
+function shapeTitle(i: Shape) {
+  if (i.kind === 'endpoint') return `${i.type} · ${t('nodes.endpointNote')}`
+  return [
+    i.type,
+    i.transport && i.transport !== 'none' ? i.transport : '',
+    i.security && i.security !== 'none' ? i.security : '',
+    i.fronted ? t('nodes.fronted') : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+function tunnelTitle(tn: TunnelOnNode) {
+  const lines = [
+    t('nodes.tunnelState.' + tn.state) +
+      (tn.state === 'down' && tn.since ? ' · ' + when(tn.since) : ''),
+    `${tn.relayName} → ${(tn.originNames ?? []).join(', ')}`,
+    t('nodes.tunnelHours', {
+      attempts: num(tn.hours.attempts),
+      up: num(tn.hours.up),
+      failed: num(tn.hours.failed),
+      flapped: num(tn.hours.flapped),
+    }),
+  ]
+  if (tn.state === 'up' && tn.unlinked?.length) {
+    const names = tn.unlinked.map((id) => {
+      const i = (tn.originIds ?? []).indexOf(id)
+      return (i >= 0 && tn.originNames?.[i]) || t('matrix.node', { id })
+    })
+    lines.push(t('nodes.unlinked', { nodes: names.join(', ') }))
+  }
+  return lines.join('\n')
+}
+
 const overridden = (n: NodeInfo) =>
   !!(n.overrideAsn || n.overrideOrg || n.overrideCountry || n.overrideCity)
 </script>
@@ -93,6 +127,36 @@ const overridden = (n: NodeInfo) =>
         <template #body="{ data }">
           {{ [data.effective.city, data.effective.country].filter(Boolean).join(', ') || '—' }}
           <Tag v-if="overridden(data)" :value="t('nodes.overridden')" severity="info" />
+        </template>
+      </Column>
+      <Column :header="t('nodes.serves')">
+        <template #body="{ data }">
+          <span v-if="!data.inbounds?.length" class="muted">—</span>
+          <span v-else class="chips">
+            <span
+              v-for="i in data.inbounds"
+              :key="i.tag"
+              class="chip mono ltr"
+              :title="shapeTitle(i)"
+              >{{ i.tag }}<i v-if="i.kind === 'endpoint'" class="pi pi-shield small"
+            /></span>
+          </span>
+        </template>
+      </Column>
+      <Column :header="t('nodes.tunnels')">
+        <template #body="{ data }">
+          <span v-if="!data.tunnels?.length" class="muted">—</span>
+          <span v-else class="chips">
+            <Tag
+              v-for="tn in data.tunnels"
+              :key="tn.id"
+              :severity="
+                tn.state === 'down' ? 'danger' : tn.state === 'up' ? 'success' : 'secondary'
+              "
+              :value="`${tn.name} · ${t('nodes.role.' + tn.role)}`"
+              :title="tunnelTitle(tn)"
+            />
+          </span>
         </template>
       </Column>
       <Column :header="t('nodes.updated')">
@@ -164,5 +228,19 @@ h1 {
 }
 .small {
   font-size: 0.8rem;
+}
+.chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+.chip {
+  font-size: 0.8rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 0.3rem;
+  background: var(--p-content-hover-background);
+  display: inline-flex;
+  gap: 0.25rem;
+  align-items: center;
 }
 </style>

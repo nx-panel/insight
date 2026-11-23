@@ -48,6 +48,7 @@ import (
 	"github.com/nx-panel/insight/internal/ingest"
 	"github.com/nx-panel/insight/internal/model"
 	"github.com/nx-panel/insight/internal/netinfo"
+	"github.com/nx-panel/insight/internal/tunnels"
 	"github.com/nx-panel/insight/internal/web"
 )
 
@@ -192,10 +193,19 @@ func run() error {
 		}()
 	}
 	in, det, _ := pipeline(gdb, net, client, send)
+	// The tunnels behind the relays (P26): a tunnel with no link speaks for
+	// its relay's paths.
+	tw := &tunnels.Watcher{DB: gdb, Send: send, Panel: func() tunnels.Getter {
+		if c := client(); c != nil {
+			return c
+		}
+		return nil
+	}}
+	det.TunnelDown = tw.Down
 
 	// Mode A: the admin's own model reads the paths after a flush when a
 	// pass is due (internal/ai); off until the admin sets it up.
-	brain := &ai.Runner{DB: gdb, State: det, Org: net.Org, Countries: cfg.RegionCountries}
+	brain := &ai.Runner{DB: gdb, State: det, Org: net.Org, Countries: cfg.RegionCountries, Tunnels: tw.Views}
 	flushed := in.AfterFlush
 	in.AfterFlush = func(ctx context.Context) {
 		flushed(ctx)
@@ -211,6 +221,7 @@ func run() error {
 	a.OnSetup(func(addon.Credentials) { go refreshNodes() })
 	work.Go(func() { mgr.Run(bg) })
 	work.Go(func() { in.Run(bg) })
+	work.Go(func() { tw.Run(bg) })
 	work.Go(func() { every(bg, nodesEvery, refreshNodes) })
 	work.Go(func() {
 		every(bg, compactEvery, func() {
@@ -232,7 +243,7 @@ func run() error {
 			spa = sub
 		}
 	}
-	app := web.New(gdb, a, cfg, a.Manifest().Version, spa, web.Parts{Ingest: in, Detect: det, Net: net, AI: brain, Countries: cfg.RegionCountries})
+	app := web.New(gdb, a, cfg, a.Manifest().Version, spa, web.Parts{Ingest: in, Detect: det, Net: net, AI: brain, Countries: cfg.RegionCountries, Tunnels: tw})
 	srv := &http.Server{
 		Addr: cfg.Addr(), Handler: app.Handler(),
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute,

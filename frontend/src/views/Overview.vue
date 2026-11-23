@@ -136,6 +136,8 @@ const rows = computed<Row[]>(() => {
 const shownRows = computed(() => (showAll.value ? rows.value : rows.value.slice(0, 40)))
 
 function cellTitle(c: Cell) {
+  if (c.kind === 'endpoint')
+    return [t('matrix.handshakes', { n: num(c.authed) }), t('matrix.endpointNote')].join('\n')
   return [
     t('matrix.accepted', { n: num(c.accepted) }),
     t('matrix.authed', { n: num(c.authed) }),
@@ -185,6 +187,13 @@ const feedSeverity = computed(() => {
       </Message>
       <Message v-for="asn in status.outages" :key="asn" severity="error" :closable="false">
         {{ t('overview.outage', { asn: 'AS' + asn }) }}
+      </Message>
+      <Message v-for="name in status.tunnelsDown" :key="name" severity="error" :closable="false">
+        {{ t('overview.tunnelDown', { name }) }}
+        <RouterLink :to="{ name: 'nodes' }">{{ t('overview.seeNodes') }}</RouterLink>
+      </Message>
+      <Message v-if="status.tunnels?.state === 'no-scope'" severity="warn" :closable="false">
+        {{ t('overview.tunnelsNoScope') }}
       </Message>
       <Message v-if="status.probed" severity="warn" :closable="false">
         {{ t('overview.probed', { n: num(status.probed) }) }}
@@ -272,18 +281,27 @@ const feedSeverity = computed(() => {
                 :key="c.key"
                 :class="
                   r.cells.get(c.key)
-                    ? health(
-                        r.cells.get(c.key)!.authed,
-                        r.cells.get(c.key)!.accepted,
-                        r.cells.get(c.key)!.degraded,
-                      )
+                    ? r.cells.get(c.key)!.kind === 'endpoint'
+                      ? r.cells.get(c.key)!.degraded
+                        ? 'bad'
+                        : 'good'
+                      : health(
+                          r.cells.get(c.key)!.authed,
+                          r.cells.get(c.key)!.accepted,
+                          r.cells.get(c.key)!.degraded,
+                        )
                     : 'empty'
                 "
                 :title="r.cells.get(c.key) ? cellTitle(r.cells.get(c.key)!) : ''"
               >
                 <template v-if="r.cells.get(c.key)">
                   <i v-if="r.cells.get(c.key)!.degraded" class="pi pi-exclamation-triangle" />
-                  {{ pct(r.cells.get(c.key)!.authed, r.cells.get(c.key)!.accepted) }}
+                  <template v-if="r.cells.get(c.key)!.kind === 'endpoint'">
+                    {{ t('matrix.handshakesShort', { n: num(r.cells.get(c.key)!.authed) }) }}
+                  </template>
+                  <template v-else>
+                    {{ pct(r.cells.get(c.key)!.authed, r.cells.get(c.key)!.accepted) }}
+                  </template>
                   <div v-if="r.cells.get(c.key)!.rttMs" class="small muted">
                     {{ num(r.cells.get(c.key)!.rttMs) }} ms
                   </div>

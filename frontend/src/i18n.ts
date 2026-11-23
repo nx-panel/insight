@@ -49,6 +49,11 @@ const en = {
     blocked: 'Blocked',
     worksInstead: 'works instead:',
     noAlternative: 'no other path works for this network right now',
+    tunnelDown:
+      'Tunnel {name} has no link: users who go out through it are cut off. Its relay’s paths drop because of the tunnel, not a block — nothing to rotate there.',
+    seeNodes: 'Nodes',
+    tunnelsNoScope:
+      'The panel refuses this addon’s token for tunnels: it lacks tunnels:read. Approve the addon’s permissions on the panel again to have cut tunnels told apart from blocks.',
   },
   feed: {
     waiting: 'Waiting for the panel.',
@@ -83,6 +88,10 @@ const en = {
     early: 'Cut within seconds: {p}',
     rtt: 'Round trip: {ms} ms',
     showAll: 'Show all {n}',
+    handshakesShort: '{n} hs',
+    handshakes: 'Handshakes that worked: {n}',
+    endpointNote:
+      'A WireGuard endpoint: it answers no handshake that fails, so only the ones that worked are counted.',
   },
   nodes: {
     title: 'Nodes',
@@ -103,6 +112,15 @@ const en = {
     city: 'City',
     emptyKeeps: 'An empty field keeps the database’s answer.',
     clear: 'Use the database',
+    serves: 'Serves',
+    tunnels: 'Tunnels',
+    role: { relay: 'relay', origin: 'origin' },
+    endpointNote: 'an endpoint: failed handshakes are not seen',
+    fronted: 'behind a domain front',
+    tunnelState: { up: 'Linked', down: 'No link', unknown: 'Not known' },
+    tunnelHours:
+      'Last 24 h on this node: {attempts} link attempts, {up} up, {failed} failed, {flapped} dropped right after',
+    unlinked: 'Up, but no link from: {nodes}',
   },
   probing: {
     title: 'Probing',
@@ -180,6 +198,8 @@ const en = {
       rotate_endpoint:
         'Rotate {node} {inbound}: a new port or SNI (with REALITY, its target site too).',
       rotate_address: 'Give {node} another address.',
+      tunnel_down:
+        'The tunnel behind {node} has no link: its paths drop because of it, not a block. Fix the tunnel; nothing to rotate on {node}.',
       all_clear: 'Nothing notable: the paths work as usual.',
     },
   },
@@ -193,12 +213,15 @@ const en = {
       path: { degraded: 'Path degraded', recovered: 'Path recovered' },
       asn: { outage: 'Network cut off', recovered: 'Network back' },
       endpoint: { probed: 'Endpoint probed' },
+      tunnel: { down: 'Tunnel down', up: 'Tunnel back' },
     },
     failures: '{p}% of connections failed the handshake (normally {n}%).',
     drop: '{p} connections an hour got through (normally {n}).',
     early: '{p}% of sessions were cut within seconds (normally {n}%).',
     outageWhy: 'Every path to it was down on {n} nodes at once.',
     probedWhy: 'Score {score}: {n} replayed handshakes in six hours.',
+    tunnelWhy: 'Users who go out through it are cut off; nothing on the relay is blocked.',
+    tunnelUnreachable: 'The panel cannot reach {nodes} either.',
   },
   security: {
     title: 'Security',
@@ -306,6 +329,11 @@ const fa: Messages = {
     blocked: 'مسدود',
     worksInstead: 'به‌جایش کار می‌کند:',
     noAlternative: 'فعلاً هیچ مسیر دیگری برای این شبکه کار نمی‌کند',
+    tunnelDown:
+      'تانل {name} لینکی ندارد: کاربرانی که از راه آن بیرون می‌روند قطع‌اند. مسیرهای نود رله به خاطر تانل افت کرده‌اند، نه مسدود شدن — آنجا چیزی برای چرخاندن نیست.',
+    seeNodes: 'نودها',
+    tunnelsNoScope:
+      'پنل توکن این افزونه را برای تانل‌ها رد می‌کند: tunnels:read ندارد. مجوزهای افزونه را دوباره در پنل تأیید کنید تا تانل قطع از مسدود شدن جدا شود.',
   },
   feed: {
     waiting: 'در انتظار پنل.',
@@ -338,6 +366,10 @@ const fa: Messages = {
     early: 'قطع در چند ثانیه: {p}',
     rtt: 'زمان رفت‌وبرگشت: {ms} میلی‌ثانیه',
     showAll: 'نمایش همهٔ {n} ردیف',
+    handshakesShort: '{n} hs',
+    handshakes: 'handshakeهای موفق: {n}',
+    endpointNote:
+      'اندپوینت WireGuard: به handshake ناموفق جواب نمی‌دهد، پس فقط handshakeهای موفق شمرده می‌شوند.',
   },
   nodes: {
     title: 'نودها',
@@ -358,6 +390,15 @@ const fa: Messages = {
     city: 'شهر',
     emptyKeeps: 'خانهٔ خالی پاسخ پایگاه داده را نگه می‌دارد.',
     clear: 'استفاده از پایگاه داده',
+    serves: 'سرویس‌ها',
+    tunnels: 'تانل‌ها',
+    role: { relay: 'رله', origin: 'مبدأ' },
+    endpointNote: 'اندپوینت: handshake ناموفق دیده نمی‌شود',
+    fronted: 'پشت domain front',
+    tunnelState: { up: 'لینک دارد', down: 'بدون لینک', unknown: 'نامعلوم' },
+    tunnelHours:
+      '۲۴ ساعت گذشته روی این نود: {attempts} تلاش اتصال، {up} برقرار، {failed} ناموفق، {flapped} بلافاصله افتاده',
+    unlinked: 'برقرار است، اما از این‌ها لینکی نیست: {nodes}',
   },
   probing: {
     title: 'پروب',
@@ -437,6 +478,8 @@ const fa: Messages = {
       rotate_endpoint:
         '{node} {inbound} را عوض کنید: پورت یا SNI تازه (در REALITY سایت مقصد را هم).',
       rotate_address: 'به {node} آدرس دیگری بدهید.',
+      tunnel_down:
+        'تانلِ پشت {node} لینکی ندارد: مسیرهایش به خاطر آن افت کرده‌اند، نه مسدود شدن. تانل را درست کنید؛ روی {node} چیزی برای چرخاندن نیست.',
       all_clear: 'چیز قابل توجهی نیست: مسیرها مثل همیشه کار می‌کنند.',
     },
   },
@@ -450,12 +493,15 @@ const fa: Messages = {
       path: { degraded: 'مسیر مختل شد', recovered: 'مسیر برگشت' },
       asn: { outage: 'شبکه قطع است', recovered: 'شبکه برگشت' },
       endpoint: { probed: 'زیر پروب' },
+      tunnel: { down: 'تانل قطع شد', up: 'تانل برگشت' },
     },
     failures: '{p}٪ اتصال‌ها در handshake رد شدند (معمولاً {n}٪).',
     drop: 'ساعتی {p} اتصال رسید (معمولاً {n}).',
     early: '{p}٪ جلسه‌ها در چند ثانیه قطع شدند (معمولاً {n}٪).',
     outageWhy: 'همهٔ مسیرها به آن هم‌زمان روی {n} نود از کار افتاده بودند.',
     probedWhy: 'امتیاز {score}: {n} handshake تکراری در شش ساعت.',
+    tunnelWhy: 'کاربرانی که از راه آن بیرون می‌روند قطع‌اند؛ روی رله چیزی مسدود نیست.',
+    tunnelUnreachable: 'پنل به {nodes} هم دسترسی ندارد.',
   },
   security: {
     title: 'امنیت',
@@ -560,6 +606,11 @@ const ru: Messages = {
     blocked: 'Блокировка',
     worksInstead: 'вместо этого работает:',
     noAlternative: 'сейчас для этой сети не работает ни один другой путь',
+    tunnelDown:
+      'У туннеля {name} нет связи: пользователи, выходящие через него, отрезаны. Пути его ретранслятора падают из-за туннеля, а не из-за блокировки — менять там нечего.',
+    seeNodes: 'Узлы',
+    tunnelsNoScope:
+      'Панель отклоняет токен дополнения для туннелей: нет tunnels:read. Подтвердите права дополнения в панели заново, чтобы обрыв туннеля не путался с блокировкой.',
   },
   feed: {
     waiting: 'Ожидание панели.',
@@ -593,6 +644,10 @@ const ru: Messages = {
     early: 'Оборвано за секунды: {p}',
     rtt: 'Время отклика: {ms} мс',
     showAll: 'Показать все {n}',
+    handshakesShort: '{n} hs',
+    handshakes: 'Удачных рукопожатий: {n}',
+    endpointNote:
+      'Точка WireGuard: на неудачное рукопожатие она не отвечает, поэтому считаются только удачные.',
   },
   nodes: {
     title: 'Узлы',
@@ -613,6 +668,15 @@ const ru: Messages = {
     city: 'Город',
     emptyKeeps: 'Пустое поле оставляет ответ базы.',
     clear: 'Брать из базы',
+    serves: 'Обслуживает',
+    tunnels: 'Туннели',
+    role: { relay: 'ретранслятор', origin: 'выход' },
+    endpointNote: 'точка подключения: неудачные рукопожатия не видны',
+    fronted: 'за доменным фронтом',
+    tunnelState: { up: 'Связь есть', down: 'Нет связи', unknown: 'Неизвестно' },
+    tunnelHours:
+      'За 24 ч на этом узле: {attempts} попыток связи, {up} установлено, {failed} неудачно, {flapped} оборвались сразу',
+    unlinked: 'Работает, но нет связи от: {nodes}',
   },
   probing: {
     title: 'Зондирование',
@@ -690,6 +754,8 @@ const ru: Messages = {
       rotate_endpoint:
         'Смените {node} {inbound}: новый порт или SNI (для REALITY — и целевой сайт).',
       rotate_address: 'Дайте {node} другой адрес.',
+      tunnel_down:
+        'У туннеля за {node} нет связи: его пути падают из-за этого, а не из-за блокировки. Почините туннель; на {node} менять нечего.',
       all_clear: 'Ничего примечательного: пути работают как обычно.',
     },
   },
@@ -703,12 +769,16 @@ const ru: Messages = {
       path: { degraded: 'Путь деградировал', recovered: 'Путь восстановлен' },
       asn: { outage: 'Сеть отрезана', recovered: 'Сеть снова доступна' },
       endpoint: { probed: 'Точку зондируют' },
+      tunnel: { down: 'Туннель упал', up: 'Туннель восстановлен' },
     },
     failures: '{p}% соединений не прошли рукопожатие (обычно {n}%).',
     drop: 'Проходило {p} соединений в час (обычно {n}).',
     early: '{p}% сессий обрывались за секунды (обычно {n}%).',
     outageWhy: 'Все пути к нему не работали одновременно на {n} узлах.',
     probedWhy: 'Оценка {score}: {n} повторённых рукопожатий за шесть часов.',
+    tunnelWhy:
+      'Пользователи, выходящие через него, отрезаны; на ретрансляторе ничего не заблокировано.',
+    tunnelUnreachable: 'Панель не может связаться и с {nodes}.',
   },
   security: {
     title: 'Безопасность',
@@ -811,6 +881,11 @@ const zh: Messages = {
     blocked: '封锁',
     worksInstead: '可改用：',
     noAlternative: '目前此网络没有其他可用路径',
+    tunnelDown:
+      '隧道 {name} 没有链路：经由它出网的用户已断开。其中继节点的路径下降是隧道造成的，而不是被封锁——那里无需轮换。',
+    seeNodes: '节点',
+    tunnelsNoScope:
+      '面板拒绝了此插件访问隧道的令牌：缺少 tunnels:read。请在面板上重新批准插件的权限，以便把隧道中断与封锁区分开。',
   },
   feed: {
     waiting: '等待面板。',
@@ -842,6 +917,9 @@ const zh: Messages = {
     early: '数秒内被切断：{p}',
     rtt: '往返时间：{ms} 毫秒',
     showAll: '显示全部 {n} 项',
+    handshakesShort: '{n} hs',
+    handshakes: '成功的握手：{n}',
+    endpointNote: 'WireGuard 端点：它不响应失败的握手，因此只统计成功的握手。',
   },
   nodes: {
     title: '节点',
@@ -862,6 +940,15 @@ const zh: Messages = {
     city: '城市',
     emptyKeeps: '留空则沿用数据库的结果。',
     clear: '使用数据库',
+    serves: '提供',
+    tunnels: '隧道',
+    role: { relay: '中继', origin: '出口' },
+    endpointNote: '端点：看不到失败的握手',
+    fronted: '位于域前置之后',
+    tunnelState: { up: '已连通', down: '无链路', unknown: '未知' },
+    tunnelHours:
+      '此节点过去 24 小时：{attempts} 次链路尝试，{up} 次建立，{failed} 次失败，{flapped} 次建立后立即断开',
+    unlinked: '已连通，但以下节点没有链路：{nodes}',
   },
   probing: {
     title: '探测',
@@ -935,6 +1022,8 @@ const zh: Messages = {
       move_users: '把 {asn} 的用户从 {node} {inbound} 迁到对他们可用的 {toNode} {toInbound}。',
       rotate_endpoint: '更换 {node} {inbound}：新的端口或 SNI（REALITY 还需更换目标网站）。',
       rotate_address: '为 {node} 换一个地址。',
+      tunnel_down:
+        '{node} 后面的隧道没有链路：其路径下降是隧道造成的，不是封锁。请修复隧道；{node} 上无需轮换。',
       all_clear: '没有值得注意的情况：路径照常工作。',
     },
   },
@@ -948,12 +1037,15 @@ const zh: Messages = {
       path: { degraded: '路径受阻', recovered: '路径已恢复' },
       asn: { outage: '网络被切断', recovered: '网络已恢复' },
       endpoint: { probed: '端点正被探测' },
+      tunnel: { down: '隧道中断', up: '隧道已恢复' },
     },
     failures: '{p}% 的连接握手失败（通常为 {n}%）。',
     drop: '每小时有 {p} 个连接通过（通常为 {n}）。',
     early: '{p}% 的会话在数秒内被切断（通常为 {n}%）。',
     outageWhy: '到它的所有路径同时在 {n} 个节点上中断。',
     probedWhy: '评分 {score}：六小时内 {n} 次重放握手。',
+    tunnelWhy: '经由它出网的用户已断开；中继上没有任何东西被封锁。',
+    tunnelUnreachable: '面板也无法连接 {nodes}。',
   },
   security: {
     title: '安全',

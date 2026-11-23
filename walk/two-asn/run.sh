@@ -11,6 +11,12 @@
 #   run.sh block     node 1 drops ISP A's data packets after the TCP
 #                    handshake, as a DPI box does: accepted, never authed
 #   run.sh check     alerts, hints, and each ISP's subscription order
+#   run.sh tunnel    a tunnel: node 1 relays, node 2 is the origin (reverse,
+#                    port 21000), so node 1's users go out through node 2
+#   run.sh cut       node 1 drops the tunnel's port and the links are reset:
+#                    the tunnel has no link, node 1's sessions authenticate
+#                    and then carry nothing (P26: tunnel.down, no
+#                    path.degraded on every network); mend undoes it
 #   run.sh down      stop and remove the stack (WALK keeps the data)
 #
 # Needs docker, jq, sqlite3 and the sibling checkouts ../nx-panel and
@@ -47,11 +53,19 @@ build() {
 # the core network (the nodes) as a German host.
 fixtures() {
 	mkdir -p "$WALK/www"
-	echo "walk origin" >"$WALK/www/index.html"
+	# Eight kilobytes: a session that fetches it moves more than the 2 KiB
+	# under which a short session counts as cut early, so a session that
+	# carries nothing — the tunnel cut behind its node — stands out.
+	head -c 8192 /dev/zero | tr '\0' 'w' >"$WALK/www/index.html"
 	printf '10.80.0.0\t10.80.0.255\t64500\tDE\tWALK-HOSTER\n10.81.0.0\t10.81.0.255\t64501\tIR\tWALK-ISP-A\n10.82.0.0\t10.82.0.255\t64502\tIR\tWALK-ISP-B\n' |
 		gzip >"$WALK/www/ip2asn.tsv.gz"
 	printf '10.80.0.0,10.80.0.255,EU,DE,Hesse,Frankfurt,0,0\n10.81.0.0,10.81.0.255,AS,IR,Tehran,Tehran,0,0\n10.82.0.0,10.82.0.255,AS,IR,Isfahan,Isfahan,0,0\n' |
 		gzip >"$WALK/www/city.csv.gz"
+	# Insight downloads over HTTPS only: the fixtures are put where it
+	# keeps its copies, fresh, so it loads them and asks for nothing.
+	mkdir -p "$WALK/insight/netinfo"
+	cp "$WALK/www/ip2asn.tsv.gz" "$WALK/insight/netinfo/ip2asn.tsv.gz"
+	cp "$WALK/www/city.csv.gz" "$WALK/insight/netinfo/dbip-city-lite.csv.gz"
 }
 
 tok() {
@@ -136,7 +150,7 @@ iget() { curl -sf -b "$WALK/jar" "$INSIGHT$1"; }
 
 status() {
 	insight_login
-	iget /api/status | jq -c '{feed: .feed.state, lastPoll: .feed.lastPoll, outages, degraded, probed}'
+	iget /api/status | jq -c '{feed: .feed.state, lastPoll: .feed.lastPoll, outages, degraded, probed, tunnels: .tunnels.state, tunnelsDown}'
 	iget '/api/matrix?hours=1' | jq -r '.cells[] | "AS\(.asn) \(.org) node\(.nodeId) \(.inbound) accepted=\(.accepted) authed=\(.authed) failed=\(.failed) degraded=\(.degraded)"'
 }
 
@@ -148,7 +162,7 @@ seed() {
 	sqlite3 "$WALK/insight/insight.db" <<SQL
 DELETE FROM path_baselines;
 INSERT INTO path_baselines (node_id, inbound, asn, network, slot, n, mean_authed, var_authed, mean_fail, var_fail, mean_early, var_early)
-SELECT DISTINCT node_id, inbound, client_asn, network, -1, 24, ${PER_HOUR:-500}, 2500, 0.01, 0.0004, 1.0, 0.001
+SELECT DISTINCT node_id, inbound, client_asn, network, -1, 24, ${PER_HOUR:-500}, 2500, 0.01, 0.0004, 0.02, 0.0004
 FROM path_hours WHERE client_asn <> 0;
 SQL
 	sqlite3 "$WALK/insight/insight.db" 'SELECT node_id, inbound, asn, network, mean_authed FROM path_baselines'
@@ -168,11 +182,40 @@ block() {
 
 unblock() { dc exec node1 iptables -F INPUT; }
 
+tunnel_id() { api GET /api/tunnels | jq -r '.[] | select(.name=="walk-tunnel") | .id'; }
+
+tunnel() {
+	TOK="$(tok)"
+	if [ -z "$(tunnel_id)" ]; then
+		say "a tunnel: node1 relays, node2 is its origin"
+		n1="$(api GET /api/nodes | jq -r '.[] | select(.name=="node1") | .id')"
+		n2="$(api GET /api/nodes | jq -r '.[] | select(.name=="node2") | .id')"
+		api POST /api/tunnels "{\"name\":\"walk-tunnel\",\"mode\":\"reverse\",\"relayNodeId\":$n1,\"originIds\":[$n2],\"listenPort\":21000}" | jq -c '{id, tag}'
+	fi
+	api GET "/api/tunnels/$(tunnel_id)/status" | jq -c '{healthy, sessions}'
+}
+
+cut() {
+	TOK="$(tok)"
+	say "node1 drops the tunnel's port; the links are reset so none survives"
+	dc exec node1 iptables -A INPUT -p tcp --dport 21000 -j DROP
+	api POST "/api/tunnels/$(tunnel_id)/reset" >/dev/null
+	api GET "/api/tunnels/$(tunnel_id)/status" | jq -c '{healthy, sessions}'
+}
+
+mend() {
+	TOK="$(tok)"
+	dc exec node1 iptables -D INPUT -p tcp --dport 21000 -j DROP
+	api GET "/api/tunnels/$(tunnel_id)/status" | jq -c '{healthy, sessions}'
+}
+
 check() {
 	insight_login
 	TOK="$(tok)"
 	say "alerts"
-	iget /api/alerts | jq -r '.[] | "\(.kind) AS\(.asn) node\(.nodeId) \(.inbound) \(.reason)"'
+	iget /api/alerts | jq -r '.[] | "\(.kind) AS\(.asn) node\(.nodeId) \(.inbound) \(.tunnel // "") \(.reason)"'
+	say "tunnels on the Nodes page"
+	iget /api/nodes | jq -r '.[] | .name as $n | .tunnels[] | "\($n) \(.name) \(.role) \(.state) attempts=\(.hours.attempts) failed=\(.hours.failed)"'
 	# The hints themselves have no read route on the panel; what they do is
 	# in the subscriptions below, and Insight logs each push.
 	say "Insight's hint pushes"
@@ -194,6 +237,9 @@ seed) seed ;;
 block) block ;;
 unblock) unblock ;;
 check) check ;;
+tunnel) tunnel ;;
+cut) cut ;;
+mend) mend ;;
 down) dc down ;;
-*) sed -n '2,20p' "$0"; exit 2 ;;
+*) sed -n '2,25p' "$0"; exit 2 ;;
 esac

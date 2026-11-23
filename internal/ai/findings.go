@@ -20,6 +20,7 @@ const (
 	CodeMoveUsers      = "move_users"
 	CodeRotateEndpoint = "rotate_endpoint"
 	CodeRotateAddress  = "rotate_address"
+	CodeTunnelDown     = "tunnel_down" // a relay's paths drop because its tunnel has no link
 	CodeAllClear       = "all_clear"
 )
 
@@ -35,13 +36,14 @@ var needs = map[string]struct{ asn, node, inbound, to bool }{
 	CodeMoveUsers:      {asn: true, node: true, inbound: true, to: true},
 	CodeRotateEndpoint: {node: true, inbound: true},
 	CodeRotateAddress:  {node: true},
+	CodeTunnelDown:     {node: true},
 	CodeAllClear:       {},
 }
 
 // Codes is every code, in the order the schema lists them.
 var Codes = []string{
 	CodeASNOutage, CodeInboundBlocked, CodeNodeBlocked, CodeProtoBlocked, CodeThrottled, CodeProbing,
-	CodeDegrading, CodeMoveUsers, CodeRotateEndpoint, CodeRotateAddress, CodeAllClear,
+	CodeDegrading, CodeMoveUsers, CodeRotateEndpoint, CodeRotateAddress, CodeTunnelDown, CodeAllClear,
 }
 
 // Finding is one structured reading. Fields a code does not use are zero.
@@ -113,6 +115,9 @@ func Parse(content string, t Table) ([]Finding, int, error) {
 	nodes := map[uint]bool{}
 	for _, n := range t.Nodes {
 		nodes[n.ID] = true
+	}
+	for _, tr := range t.Tunnels {
+		nodes[tr.Relay] = nodes[tr.Relay] || tr.Down // a relay named by a tunnel row
 	}
 	asns := map[uint32]bool{}
 	paths := map[string]bool{} // "asn node inbound" and "node inbound"
@@ -234,11 +239,17 @@ func supported(f Finding, t Table) bool {
 	for _, a := range t.Outages {
 		out[a] = true
 	}
-	down := func(p Path) bool { return p.Degraded || p.Success < blockedBelow }
-	// Blocked is down while its network is up: in an outage nothing of the
-	// operator's is blocked and nothing is worth rotating (P20).
-	blocked := func(p Path) bool { return down(p) && !out[p.ASN] }
-	works := func(p Path) bool { return !p.Degraded && p.Success >= worksFrom }
+	cut := t.cut()
+	// An endpoint's success is unknown (Path.Endpoint): it is down when
+	// the detector says so, and works otherwise.
+	down := func(p Path) bool { return p.Degraded || (p.Success >= 0 && p.Success < blockedBelow) }
+	// Blocked is down while its network is up and its node's tunnel works:
+	// in an outage nothing of the operator's is blocked and nothing is
+	// worth rotating (P20), and a relay whose tunnel is cut is not blocked
+	// either (P26). Users on it are still better moved.
+	blocked := func(p Path) bool { return down(p) && !out[p.ASN] && !cut[p.Node] }
+	unreachable := func(p Path) bool { return down(p) && !out[p.ASN] }
+	works := func(p Path) bool { return !p.Degraded && (p.Success < 0 || p.Success >= worksFrom) }
 	var all []Path // the finding's network, or every path
 	for _, p := range t.Paths {
 		if f.ASN == 0 || p.ASN == f.ASN {
@@ -286,7 +297,7 @@ func supported(f Finding, t Table) bool {
 		if out[f.ASN] {
 			return true
 		}
-		return allOf(all, func(p Path) bool { return p.Success < 20 })
+		return allOf(all, func(p Path) bool { return p.Degraded || (p.Success >= 0 && p.Success < 20) })
 	case CodeInboundBlocked:
 		return anyOf(rows(f.Node, f.Inbound), blocked)
 	case CodeNodeBlocked:
@@ -310,7 +321,9 @@ func supported(f Finding, t Table) bool {
 			return p.Degraded || (p.NormalFail >= 0 && p.Fail >= p.NormalFail+15)
 		})
 	case CodeMoveUsers:
-		return anyOf(rows(f.Node, f.Inbound), blocked) && allOf(rows(f.ToNode, f.ToInbound), works)
+		return anyOf(rows(f.Node, f.Inbound), unreachable) && allOf(rows(f.ToNode, f.ToInbound), works) && !cut[f.ToNode]
+	case CodeTunnelDown:
+		return cut[f.Node]
 	case CodeProbing, CodeRotateEndpoint:
 		for _, s := range t.Probed {
 			if s.NodeID == f.Node && s.Inbound == f.Inbound && s.Score > 0 {
@@ -345,12 +358,13 @@ func supported(f Finding, t Table) bool {
 // prompt cache can hold it.
 const systemPrompt = `You analyse the reachability of a VPN operator's proxy nodes from the networks of their users, for operators in Iran, Russia and China, where censors block proxies per network (ASN), per protocol, per server address, or cut whole networks off.
 
-You receive one table for one client country over the last 24 hours: each path is one client network (asn) to one node and one inbound (a protocol, port and SNI on that node), with connections accepted, the share that authenticated (success%), the share whose handshake failed (fail%) and its normal, the share of authenticated sessions cut within seconds with almost no data (early_close%) and its normal, handshakes replayed by a prober, the round trip, and whether the operator's detector already marks it degraded. Also: networks fully cut off now, endpoints with active-probing evidence, and alert counts.
+You receive one table for one client country over the last 24 hours: each path is one client network (asn) to one node and one inbound (a protocol, port and SNI on that node), with connections accepted, the share that authenticated (success%), the share whose handshake failed (fail%) and its normal, the share of authenticated sessions cut within seconds with almost no data (early_close%) and its normal, handshakes replayed by a prober, the round trip, and whether the operator's detector already marks it degraded. Also: networks fully cut off now, the node-to-node tunnels (a relay node users connect to, carried to origin nodes) and whether each has no link now, endpoints with active-probing evidence, and alert counts. A path of kind endpoint is a WireGuard endpoint, which never answers a failed handshake: its accepted is the handshakes that worked, its success% and fail% are unknown (-), and only its state says it is down.
 
 Read it the way an experienced operator would:
 - a whole network down on every node at once is an outage (shutdown, whitelist), not a block of the operator: say asn_outage and propose nothing to rotate for it;
 - one inbound failing for a network while other inbounds on the same node work: inbound_blocked (protocol, port or SNI fingerprinted);
 - every inbound of one node failing for a network while other nodes work: node_blocked (address blocked), and rotate_address for that node;
+- a tunnel that is down: every path on its relay node drops because of it, not a block: say tunnel_down for the relay node and propose nothing to rotate for that node (moving its users is fine);
 - the same inbound tag failing on every node for a network: protocol_blocked;
 - handshakes succeed but sessions are cut early far above normal: throttled;
 - replayed handshakes or a probing score: probing, and rotate_endpoint before a block lands;

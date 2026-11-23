@@ -4,8 +4,10 @@ An addon for [NX Panel](https://github.com/nx-panel/panel) that shows which
 paths from your users to your nodes still work: per client network (ASN and,
 in Iran, Russia and China, region), per node and per inbound — accepted,
 failed and authenticated connections, early closes, round-trip times and
-retransmits. It warns when a path is blocked or an endpoint is being probed,
-and can put the links that work first in each user's subscription.
+retransmits. It warns when a path is blocked, an endpoint is being probed
+or a tunnel between your nodes has no link (and then does not blame the
+relay's inbounds for it), and can put the links that work first in each
+user's subscription.
 
 Optionally, your own AI model — any OpenAI-compatible API with your key, or
 Ollama on your server — reads the paths once a day, and after each alert,
@@ -15,7 +17,8 @@ the numbers. What is sent, to your model and nowhere else: per network (its
 AS number and registered name), node number and inbound tag, the last 24
 hours' counts and ratios; each node's hosting country and provider (yours,
 where you corrected it on the Nodes page); the probing scores and how many
-alerts there were. Never a client's or a node's address and never a node's
+alerts there were; each tunnel touching those nodes, by its name, with its
+relay and origin node numbers and whether it has a link. Never a client's or a node's address and never a node's
 name. Names are cut down to forty letters, digits, spaces, dashes and
 underscores before they go — no dots, so no address or URL as written — but a tag or a provider
 name still says what it spells, so mind what you put in them. Nothing goes to NX.

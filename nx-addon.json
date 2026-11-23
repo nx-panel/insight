@@ -266,6 +266,10 @@
     {
       "scope": "nodes:read",
       "purpose": "to learn each node's address, so its host network and city can be shown"
+    },
+    {
+      "scope": "tunnels:read",
+      "purpose": "to see whether each tunnel between your nodes has a link, so a cut tunnel is not mistaken for blocked inbounds on its relay"
     }
   ],
   "events": [

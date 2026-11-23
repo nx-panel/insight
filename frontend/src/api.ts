@@ -87,6 +87,8 @@ export interface Status {
   outages: number[]
   degraded: number
   probed: number
+  tunnels: { state: 'waiting' | 'ok' | 'unsupported' | 'no-scope' | 'error'; error?: string }
+  tunnelsDown: string[]
 }
 
 export interface Cell {
@@ -107,6 +109,35 @@ export interface Cell {
   up: number
   down: number
   degraded: boolean
+  // 'endpoint': a WireGuard endpoint's cell, which counts only the
+  // handshakes that worked — never a failure.
+  kind?: 'endpoint'
+}
+
+// What a node serves, by the tag its cells carry.
+export interface Shape {
+  tag: string
+  kind: 'inbound' | 'endpoint'
+  type: string
+  transport?: string
+  security?: string
+  fronted: boolean
+}
+
+export interface TunnelOnNode {
+  id: number
+  name: string
+  mode: string
+  enabled: boolean
+  relayId: number
+  relayName: string
+  originIds: number[] | null
+  originNames: string[] | null
+  state: 'up' | 'down' | 'unknown'
+  since?: number
+  unlinked?: number[] | null
+  role: 'relay' | 'origin'
+  hours: { attempts: number; up: number; failed: number; flapped: number }
 }
 
 export interface NodeInfo {
@@ -124,6 +155,9 @@ export interface NodeInfo {
   overrideCity: string
   updatedAt: number
   effective: { asn: number; org: string; country: string; city: string }
+  // On the Nodes page only.
+  inbounds?: Shape[]
+  tunnels?: TunnelOnNode[]
 }
 
 export interface Matrix {
@@ -203,8 +237,16 @@ export interface Endpoint {
 
 export interface Alert {
   id: number
-  kind: 'path.degraded' | 'path.recovered' | 'asn.outage' | 'asn.recovered' | 'endpoint.probed'
+  kind:
+    | 'path.degraded'
+    | 'path.recovered'
+    | 'asn.outage'
+    | 'asn.recovered'
+    | 'endpoint.probed'
+    | 'tunnel.down'
+    | 'tunnel.up'
   nodeId: number
+  tunnel?: string
   inbound: string
   asn: number
   org: string

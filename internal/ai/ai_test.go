@@ -436,6 +436,52 @@ func TestNothingIsRotatedForANetworkThatIsCutOff(t *testing.T) {
 	}
 }
 
+// TestNothingIsRotatedOnARelayWhoseTunnelIsCut: with a relay's tunnel
+// down, its dead paths are the tunnel (P26) — tunnel_down is kept, a block
+// or rotation for that node is dropped, moving its users to a working node
+// is kept; and a WireGuard endpoint's row, whose success is unknown, is
+// down only by its state.
+func TestNothingIsRotatedOnARelayWhoseTunnelIsCut(t *testing.T) {
+	tbl := ai.Table{
+		Nodes:   []ai.HostNode{{ID: 1}, {ID: 2}},
+		Tunnels: []ai.TunnelRow{{Name: "to-de", Relay: 1, Origins: []uint{3}, Down: true}},
+		Paths: []ai.Path{
+			{ASN: 44244, Node: 1, Inbound: "vless", Success: 2, Degraded: true},
+			{ASN: 44244, Node: 2, Inbound: "vless", Success: 95},
+			{ASN: 44244, Node: 2, Inbound: "wg", Network: "udp", Endpoint: true, Success: -1, Fail: -1, NormalFail: -1},
+		},
+	}
+	f := func(code string, asn uint32, node uint, inbound string, to uint, toIn string) string {
+		raw, _ := json.Marshal(ai.Finding{Code: code, Severity: "warn", ASN: asn, Node: node, Inbound: inbound, ToNode: to, ToInbound: toIn})
+		return string(raw)
+	}
+	answer := `{"findings":[` + strings.Join([]string{
+		f(ai.CodeTunnelDown, 0, 1, "", 0, ""),              // kept
+		f(ai.CodeTunnelDown, 0, 2, "", 0, ""),              // node 2 has no tunnel down: dropped
+		f(ai.CodeNodeBlocked, 44244, 1, "", 0, ""),         // the tunnel: dropped
+		f(ai.CodeRotateAddress, 0, 1, "", 0, ""),           // dropped
+		f(ai.CodeInboundBlocked, 44244, 1, "vless", 0, ""), // dropped
+		f(ai.CodeMoveUsers, 44244, 1, "vless", 2, "vless"), // kept
+		f(ai.CodeInboundBlocked, 44244, 2, "wg", 0, ""),    // an endpoint not degraded: dropped
+	}, ",") + `]}`
+	got, dropped, err := ai.Parse(answer, tbl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	codes := []string{}
+	for _, g := range got {
+		codes = append(codes, g.Code)
+	}
+	if strings.Join(codes, ",") != "tunnel_down,move_users" || dropped != 5 {
+		t.Fatalf("kept %v, dropped %d", codes, dropped)
+	}
+	text := tbl.Text()
+	if !strings.Contains(text, "# tunnels: tunnel|relay_node|origin_nodes|state\nto-de|1|3|down\n") ||
+		!strings.Contains(text, "|wg|udp|0|-|-|-|") || !strings.Contains(text, "|endpoint\n") {
+		t.Fatalf("table:\n%s", text)
+	}
+}
+
 // TestASavedKeyStaysWithItsProvider: the saved key is kept for the same API
 // host and proxy only, and a proxy's password is never shown.
 func TestASavedKeyStaysWithItsProvider(t *testing.T) {

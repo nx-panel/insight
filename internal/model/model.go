@@ -84,6 +84,55 @@ type PathDay struct {
 
 func (PathDay) TableName() string { return "path_days" }
 
+// TunnelCell names one tunnel link's hour on one node (nx-panel
+// docs/path-telemetry.md P26): the tunnel's tag, the peer node's name, the
+// address dialled (empty on the accepting side) and the side. A peer is
+// one of the operator's own nodes, never a client.
+type TunnelCell struct {
+	Hour   int64  `json:"hour" gorm:"primaryKey;autoIncrement:false"`
+	NodeID uint   `json:"nodeId" gorm:"primaryKey;autoIncrement:false"`
+	Tunnel string `json:"tunnel" gorm:"primaryKey;size:128"`
+	Peer   string `json:"peer" gorm:"primaryKey;size:128"`
+	Server string `json:"server" gorm:"primaryKey;size:255"`
+	Side   string `json:"side" gorm:"primaryKey;size:8"`
+}
+
+// TunnelCounters are a tunnel link's additive counts: attempts, links up,
+// failures by step, links that came up and died before settling, and the
+// links' lifetimes as a sum of each drain's median and how many there were.
+type TunnelCounters struct {
+	Attempts      uint64 `json:"attempts"`
+	Up            uint64 `json:"up"`
+	Flapped       uint64 `json:"flapped"`
+	FailedDial    uint64 `json:"failedDial"`
+	FailedTLS     uint64 `json:"failedTls" gorm:"column:failed_tls"`
+	FailedPreface uint64 `json:"failedPreface"`
+	FailedRefused uint64 `json:"failedRefused"`
+	FailedTimeout uint64 `json:"failedTimeout"`
+	FailedReset   uint64 `json:"failedReset"`
+	FailedEOF     uint64 `json:"failedEof" gorm:"column:failed_eof"`
+	FailedOther   uint64 `json:"failedOther"`
+	LifetimeSum   uint64 `json:"lifetimeSum"`
+	LifetimeN     uint64 `json:"lifetimeN"`
+}
+
+// Failed is every failure of the counters.
+func (c TunnelCounters) Failed() uint64 {
+	return c.FailedDial + c.FailedTLS + c.FailedPreface + c.FailedRefused + c.FailedTimeout + c.FailedReset + c.FailedEOF + c.FailedOther
+}
+
+// TunnelHour is one tunnel link over one hour, kept TunnelHourDays days.
+type TunnelHour struct {
+	TunnelCell
+	TunnelCounters
+}
+
+func (TunnelHour) TableName() string { return "tunnel_hours" }
+
+// TunnelHourDays is how long a tunnel hour is kept: a fleet has a handful
+// of links, so they are not folded into days.
+const TunnelHourDays = 30
+
 // NodeNetinfo is what a node's address is: its host network, read from
 // the network information, and what the admin set over it.
 type NodeNetinfo struct {
@@ -172,5 +221,5 @@ type Session struct {
 
 // All is every table, for the migration.
 func All() []any {
-	return []any{&PathHour{}, &PathDay{}, &NodeNetinfo{}, &State{}, &Admin{}, &Session{}}
+	return []any{&PathHour{}, &PathDay{}, &TunnelHour{}, &NodeNetinfo{}, &State{}, &Admin{}, &Session{}}
 }

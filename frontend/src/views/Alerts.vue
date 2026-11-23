@@ -31,13 +31,31 @@ const nodeName = (id: number) =>
   nodes.value.find((n) => n.nodeId === id)?.name || t('matrix.node', { id })
 
 const severity = (k: Alert['kind']) =>
-  k === 'path.degraded'
+  k === 'path.degraded' || k === 'tunnel.down'
     ? 'danger'
     : k === 'asn.outage' || k === 'endpoint.probed'
       ? 'warn'
       : 'success'
 
+// A tunnel alert's detail: its origins, and those the panel could not reach.
+function tunnelDetail(a: Alert): { origins: string[]; unreachable: string[] } {
+  try {
+    const d = JSON.parse(a.detail || '{}')
+    return { origins: d.origins ?? [], unreachable: d.unreachable ?? [] }
+  } catch {
+    return { origins: [], unreachable: [] }
+  }
+}
+
 function reason(a: Alert) {
+  if (a.kind === 'tunnel.down') {
+    const d = tunnelDetail(a)
+    const why = t('alerts.tunnelWhy')
+    return d.unreachable.length
+      ? why + ' ' + t('alerts.tunnelUnreachable', { nodes: d.unreachable.join(', ') })
+      : why
+  }
+  if (a.kind === 'tunnel.up') return ''
   let d: Record<string, number> = {}
   try {
     d = JSON.parse(a.detail || '{}')
@@ -80,7 +98,12 @@ function reason(a: Alert) {
           <Tag :severity="severity(a.kind)" :value="t('alerts.kind.' + a.kind)" />
           <span class="muted">{{ when(a.at) }}</span>
         </div>
-        <div v-if="a.kind.startsWith('endpoint.')">
+        <div v-if="a.kind.startsWith('tunnel.')">
+          <b class="ltr">{{ a.tunnel }}</b>: {{ nodeName(a.nodeId) }}
+          <span class="dir-arrow">→</span>
+          {{ tunnelDetail(a).origins.join(', ') || '—' }}
+        </div>
+        <div v-else-if="a.kind.startsWith('endpoint.')">
           <b>{{ nodeName(a.nodeId) }}</b> <span class="mono ltr">{{ a.inbound }}</span>
         </div>
         <div v-else>

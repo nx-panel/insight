@@ -13,6 +13,7 @@ import (
 	"github.com/nx-panel/insight/internal/ingest"
 	"github.com/nx-panel/insight/internal/model"
 	"github.com/nx-panel/insight/internal/netinfo"
+	"github.com/nx-panel/insight/internal/tunnels"
 )
 
 // The admin web's data: the feed's status, the matrix, the nodes and their
@@ -103,10 +104,24 @@ type statusView struct {
 	Degraded    int           `json:"degraded"`
 	// Probed is how many endpoints are in a probed episode now.
 	Probed int64 `json:"probed"`
+	// Tunnels is the tunnel watcher's state and TunnelsDown the names of
+	// the tunnels with no link now (P26).
+	Tunnels     tunnels.Status `json:"tunnels"`
+	TunnelsDown []string       `json:"tunnelsDown"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, _ model.Admin) {
-	v := statusView{Version: s.version, Attribution: netinfo.Attribution, Outages: []uint32{}}
+	v := statusView{Version: s.version, Attribution: netinfo.Attribution, Outages: []uint32{}, TunnelsDown: []string{}}
+	if s.tunnels != nil {
+		v.Tunnels = s.tunnels.Status()
+		for _, t := range s.tunnels.Views() {
+			if t.State == tunnels.Down {
+				v.TunnelsDown = append(v.TunnelsDown, t.Name)
+			}
+		}
+	} else {
+		v.Tunnels.State = tunnels.StateWaiting
+	}
 	if c := s.addon.Credentials(); c != nil {
 		v.Registered, v.Panel = true, c.Panel.URL
 	} else {
@@ -165,6 +180,11 @@ type cellView struct {
 	Up         int64   `json:"up"`
 	Down       int64   `json:"down"`
 	Degraded   bool    `json:"degraded"`
+	// Kind is "endpoint" for a WireGuard, OpenVPN or OpenConnect
+	// endpoint's cell, which counts handshakes that worked and no failure
+	// (ingest.KindEndpoint); empty for an inbound, or when the panel did
+	// not say.
+	Kind string `json:"kind,omitempty"`
 }
 
 type matrixRow struct {
@@ -254,12 +274,19 @@ func (s *Server) handleMatrix(w http.ResponseWriter, r *http.Request, _ model.Ad
 			rows = append(rows, more...)
 		}
 	}
+	var shapes map[uint]map[string]ingest.Shape
+	if s.ingest != nil {
+		shapes = s.ingest.Shapes()
+	}
 	cells := make([]cellView, 0, len(rows))
 	for _, r := range rows {
 		c := cellView{
 			ASN: r.ClientASN, Country: r.Country, Region: r.Region, NodeID: r.NodeID, Inbound: r.Inbound, Network: r.Network,
 			Accepted: r.Accepted, Authed: r.Authed, Failed: r.Failed, EarlyClose: r.EarlyClose, Up: r.Up, Down: r.Down,
 			Degraded: degraded[detect.Key{Node: r.NodeID, Inbound: r.Inbound, ASN: r.ClientASN, Network: r.Network}],
+		}
+		if sh, ok := shapes[r.NodeID][r.Inbound]; ok && sh.Kind == ingest.KindEndpoint {
+			c.Kind = ingest.KindEndpoint
 		}
 		if s.net != nil {
 			c.Org = s.net.Org(r.ClientASN)
@@ -300,13 +327,127 @@ func nodeViews(nodes []model.NodeNetinfo) []nodeView {
 	return out
 }
 
+// nodeRow is a node on the Nodes page: its network, what it serves, and
+// the tunnels it is a relay or an origin of.
+type nodeRow struct {
+	nodeView
+	Inbounds []ingest.Shape `json:"inbounds"`
+	Tunnels  []tunnelOnNode `json:"tunnels"`
+}
+
+// tunnelOnNode is a tunnel seen from one of its nodes.
+type tunnelOnNode struct {
+	tunnels.View
+	Role string `json:"role"` // relay | origin
+	// Hours are its links' counts on this node over the last 24 hours.
+	Hours tunnelTotals `json:"hours"`
+}
+
+// tunnelTotals are a tunnel's link counts on one node over a window.
+type tunnelTotals struct {
+	Attempts uint64 `json:"attempts"`
+	Up       uint64 `json:"up"`
+	Failed   uint64 `json:"failed"`
+	Flapped  uint64 `json:"flapped"`
+}
+
+// tunnelWindow is what the Nodes page sums a tunnel's links over.
+const tunnelWindow = 24 * time.Hour
+
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request, _ model.Admin) {
 	var nodes []model.NodeNetinfo
 	if err := s.db.WithContext(r.Context()).Order("node_id").Find(&nodes).Error; err != nil {
 		serverError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, nodeViews(nodes))
+	totals, err := s.tunnelTotals(r, time.Now().Add(-tunnelWindow))
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	var views []tunnels.View
+	if s.tunnels != nil {
+		views = s.tunnels.Views()
+	}
+	var shapes map[uint]map[string]ingest.Shape
+	if s.ingest != nil {
+		shapes = s.ingest.Shapes()
+	}
+	out := make([]nodeRow, 0, len(nodes))
+	for _, v := range nodeViews(nodes) {
+		row := nodeRow{nodeView: v, Inbounds: []ingest.Shape{}, Tunnels: []tunnelOnNode{}}
+		for _, sh := range shapes[v.NodeID] {
+			row.Inbounds = append(row.Inbounds, sh)
+		}
+		sort.Slice(row.Inbounds, func(i, j int) bool { return row.Inbounds[i].Tag < row.Inbounds[j].Tag })
+		for _, t := range views {
+			role := ""
+			if t.RelayID == v.NodeID {
+				role = "relay"
+			} else {
+				for _, o := range t.OriginIDs {
+					if o == v.NodeID {
+						role = "origin"
+					}
+				}
+			}
+			if role == "" {
+				continue
+			}
+			row.Tunnels = append(row.Tunnels, tunnelOnNode{View: t, Role: role, Hours: totals[tunnelNode{v.NodeID, t.Name}]})
+		}
+		out = append(out, row)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+type tunnelNode struct {
+	node uint
+	name string
+}
+
+// tunnelTotals sums every node's tunnel hours since a time, by node and
+// tunnel name. A link's samples carry the tunnel's tag on the node, which
+// the panel derives from the name; both are matched.
+func (s *Server) tunnelTotals(r *http.Request, since time.Time) (map[tunnelNode]tunnelTotals, error) {
+	var rows []struct {
+		NodeID   uint
+		Tunnel   string
+		Attempts uint64
+		Up       uint64
+		Failed   uint64
+		Flapped  uint64
+	}
+	err := s.db.WithContext(r.Context()).Model(&model.TunnelHour{}).
+		Select("node_id, tunnel, SUM(attempts) AS attempts, SUM(up) AS up, SUM(flapped) AS flapped, "+
+			"SUM(failed_dial + failed_tls + failed_preface + failed_refused + failed_timeout + failed_reset + failed_eof + failed_other) AS failed").
+		Where("hour >= ?", since.Truncate(time.Hour).Unix()).Group("node_id, tunnel").Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	var views []tunnels.View
+	if s.tunnels != nil {
+		views = s.tunnels.Views()
+	}
+	byTag := map[string]string{}
+	for _, v := range views {
+		byTag[v.Tag] = v.Name
+	}
+	out := map[tunnelNode]tunnelTotals{}
+	for _, row := range rows {
+		name := row.Tunnel
+		if n, ok := byTag[row.Tunnel]; ok {
+			name = n
+		}
+		k := tunnelNode{row.NodeID, name}
+		t := out[k]
+		t.Attempts += row.Attempts
+		t.Up += row.Up
+		t.Failed += row.Failed
+		t.Flapped += row.Flapped
+		out[k] = t
+	}
+	return out, nil
 }
 
 // handleOverride is PUT /api/nodes/{id}/override: what the admin says the
@@ -411,7 +552,8 @@ const (
 )
 
 // handleSuggestions is GET /api/suggestions: for every degraded path not
-// inside an ASN outage (P20: nothing to rotate there), the paths that work
+// inside an ASN outage (P20: nothing to rotate there) nor on the relay of a
+// tunnel that is down (P26: the tunnel is the cause), the paths that work
 // for that client network instead. The subscription hints already put them
 // first; this is what the admin can do about the rest — move the users,
 // change the node's address or the inbound's port or SNI.
@@ -423,6 +565,10 @@ func (s *Server) handleSuggestions(w http.ResponseWriter, r *http.Request, _ mod
 	}
 	outages := s.detect.Outages()
 	degraded := s.detect.Degraded()
+	tunnelDown := map[uint]bool{}
+	if s.tunnels != nil {
+		tunnelDown = s.tunnels.Down()
+	}
 	if len(degraded) == 0 {
 		writeJSON(w, http.StatusOK, out)
 		return
@@ -448,8 +594,8 @@ func (s *Server) handleSuggestions(w http.ResponseWriter, r *http.Request, _ mod
 		byASN[r.ClientASN] = append(byASN[r.ClientASN], alternative{NodeID: r.NodeID, Inbound: r.Inbound, Network: r.Network, Success: success})
 	}
 	for k := range degraded {
-		if outages[k.ASN] {
-			continue
+		if outages[k.ASN] || tunnelDown[k.Node] {
+			continue // nothing to rotate: the network, or the tunnel behind the node
 		}
 		alts := byASN[k.ASN]
 		sort.Slice(alts, func(i, j int) bool { return alts[i].Success > alts[j].Success })
