@@ -59,7 +59,7 @@ const en = {
     waiting: 'Waiting for the panel.',
     ok: 'Reading the panel’s path telemetry.',
     unsupported:
-      'The panel does not have path telemetry yet. Update the panel and the nodes (0.1.3 or later).',
+      'The panel does not have path telemetry yet. Update the panel and the nodes (0.2.0 or later).',
     'no-scope':
       'The panel refuses this addon’s token: it lacks telemetry:read. Approve the addon’s permissions on the panel again.',
     error: 'The last read of the panel failed; it is tried again every minute.',
@@ -338,7 +338,7 @@ const fa: Messages = {
   feed: {
     waiting: 'در انتظار پنل.',
     ok: 'تلمتری مسیرِ پنل خوانده می‌شود.',
-    unsupported: 'پنل هنوز تلمتری مسیر ندارد. پنل و نودها را به‌روز کنید (۰٫۱٫۳ یا بالاتر).',
+    unsupported: 'پنل هنوز تلمتری مسیر ندارد. پنل و نودها را به‌روز کنید (۰٫۲٫۰ یا بالاتر).',
     'no-scope':
       'پنل توکن این افزونه را نمی‌پذیرد: telemetry:read ندارد. مجوزهای افزونه را دوباره در پنل تأیید کنید.',
     error: 'آخرین خواندن از پنل ناموفق بود؛ هر دقیقه دوباره امتحان می‌شود.',
@@ -615,7 +615,7 @@ const ru: Messages = {
   feed: {
     waiting: 'Ожидание панели.',
     ok: 'Телеметрия путей панели читается.',
-    unsupported: 'В панели ещё нет телеметрии путей. Обновите панель и узлы (0.1.3 или новее).',
+    unsupported: 'В панели ещё нет телеметрии путей. Обновите панель и узлы (0.2.0 или новее).',
     'no-scope':
       'Панель отклоняет токен дополнения: нет telemetry:read. Снова подтвердите разрешения дополнения в панели.',
     error: 'Последнее чтение панели не удалось; повтор каждую минуту.',
@@ -890,7 +890,7 @@ const zh: Messages = {
   feed: {
     waiting: '等待面板。',
     ok: '正在读取面板的路径遥测。',
-    unsupported: '面板尚无路径遥测。请更新面板和节点（0.1.3 或更高版本）。',
+    unsupported: '面板尚无路径遥测。请更新面板和节点（0.2.0 或更高版本）。',
     'no-scope': '面板拒绝本扩展的令牌：缺少 telemetry:read。请在面板中重新批准扩展的权限。',
     error: '上次读取面板失败；每分钟重试一次。',
   },

@@ -42,11 +42,11 @@ arch() { case "$(uname -m)" in arm64 | aarch64) echo arm64 ;; *) echo amd64 ;; e
 build() {
 	mkdir -p "$WALK/bin"
 	local a; a="$(arch)"
-	# addondev: it trusts the development-signed manifest; 0.1.3: the release
+	# addondev: it trusts the development-signed manifest; 0.2.0: the release
 	# that carries path telemetry, which the manifest asks for.
 	say "panel"
 	(cd "$ROOT/nx-panel/frontend" && npm run -s build >/dev/null)
-	(cd "$ROOT/nx-panel" && CGO_ENABLED=0 GOOS=linux GOARCH="$a" go build -tags addondev -ldflags "-X main.Version=0.1.3" -o "$WALK/bin/nx-panel" ./cmd/nx-panel)
+	(cd "$ROOT/nx-panel" && CGO_ENABLED=0 GOOS=linux GOARCH="$a" go build -tags addondev -ldflags "-X main.Version=0.2.0" -o "$WALK/bin/nx-panel" ./cmd/nx-panel)
 	say "node"
 	(cd "$ROOT/nx-node" && CGO_ENABLED=0 GOOS=linux GOARCH="$a" go build -o "$WALK/bin/nx-node" ./cmd/nx-node)
 	say "insight"
