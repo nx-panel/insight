@@ -1,10 +1,5 @@
 {
   "api": 1,
-  "slug": "insight",
-  "name": "NX Insight",
-  "version": "0.1.0",
-  "publisher": "NX",
-  "license": "AGPL-3.0",
   "description": {
     "en": "Shows which of your nodes and protocols still reach which of your users' ISPs, warns when a path is blocked, and puts the links that work first in each user's subscription. Client addresses never leave your server.",
     "fa": "نشان می‌دهد کدام نودها و پروتکل‌هایتان هنوز به کدام اپراتورِ کاربرانتان می‌رسند، وقتی مسیری بسته شود هشدار می‌دهد، و لینک‌های کارا را در اشتراک هر کاربر جلو می‌آورد. آدرس کلاینت‌ها هیچ‌وقت از سرور شما بیرون نمی‌رود.",
@@ -12,26 +7,30 @@
     "zh": "显示您的哪些节点和协议仍能到达用户所在的运营商，在路径被封锁时发出警告，并把可用的链接排在每个用户订阅的前面。客户端地址绝不会离开您的服务器。"
   },
   "docs": "https://github.com/nx-panel/insight",
+  "events": [
+    "panel.addon_removed"
+  ],
+  "health": "/health",
   "install": {
-    "docker": {
-      "image": "ghcr.io/nx-panel/insight",
-      "compose": "deploy/compose.yml"
-    },
     "binary": {
       "linux-amd64": "insight-linux-amd64.tar.gz",
       "linux-arm64": "insight-linux-arm64.tar.gz"
     },
+    "docker": {
+      "compose": "deploy/compose.yml",
+      "image": "ghcr.io/nx-panel/insight"
+    },
     "options": [
       {
-        "key": "port",
-        "type": "port",
         "default": 8099,
+        "key": "port",
         "label": {
           "en": "Port",
           "fa": "پورت",
           "ru": "Порт",
           "zh": "端口"
-        }
+        },
+        "type": "port"
       },
       {
         "help": {
@@ -50,19 +49,19 @@
         "type": "path"
       },
       {
-        "key": "database",
-        "type": "choice",
         "choices": [
           "sqlite",
           "postgres"
         ],
         "default": "sqlite",
+        "key": "database",
         "label": {
           "en": "Database",
           "fa": "دیتابیس",
           "ru": "База данных",
           "zh": "数据库"
-        }
+        },
+        "type": "choice"
       },
       {
         "key": "database_dsn",
@@ -173,87 +172,85 @@
         "type": "string"
       },
       {
-        "key": "region_countries",
-        "type": "string",
         "default": "IR,RU,CN",
+        "help": {
+          "en": "Two-letter codes. Clients elsewhere get their network and country, no region.",
+          "fa": "کدهای دوحرفی. کلاینت‌های جاهای دیگر شبکه و کشورشان را دارند، بدون استان.",
+          "ru": "Двухбуквенные коды. Для остальных клиентов — сеть и страна, без региона.",
+          "zh": "两字母代码。其他地方的客户端只记录网络和国家，不记录地区。"
+        },
+        "key": "region_countries",
         "label": {
           "en": "Countries to tell regions apart in",
           "fa": "کشورهایی که استان‌هایشان جدا دیده شود",
           "ru": "Страны с разбивкой по регионам",
           "zh": "区分地区的国家"
         },
-        "help": {
-          "en": "Two-letter codes. Clients elsewhere get their network and country, no region.",
-          "fa": "کدهای دوحرفی. کلاینت‌های جاهای دیگر شبکه و کشورشان را دارند، بدون استان.",
-          "ru": "Двухбуквенные коды. Для остальных клиентов — сеть и страна, без региона.",
-          "zh": "两字母代码。其他地方的客户端只记录网络和国家，不记录地区。"
-        }
+        "type": "string"
       },
       {
+        "help": {
+          "en": "16 characters or more. Prometheus sends it as a bearer token to the admin path's /metrics: per node, inbound and client network (AS number and name, never an address). Empty: no /metrics.",
+          "fa": "دست‌کم ۱۶ نویسه. Prometheus آن را به‌صورت bearer token به /metrics زیر مسیر ادمین می‌فرستد: به ازای نود، inbound و شبکهٔ کلاینت (شمارهٔ AS و نام، هرگز آدرس). خالی: بدون /metrics.",
+          "ru": "Не короче 16 символов. Prometheus передаёт его как bearer-токен на /metrics под путём админки: по узлу, inbound и сети клиента (номер AS и имя, никогда адрес). Пусто — без /metrics.",
+          "zh": "至少 16 个字符。Prometheus 将其作为 bearer 令牌发送到管理路径下的 /metrics：按节点、inbound 和客户端网络（AS 号和名称，绝无地址）。留空：不提供 /metrics。"
+        },
         "key": "metrics_token",
-        "type": "secret",
         "label": {
           "en": "Token for Prometheus (/metrics)",
           "fa": "توکن Prometheus (/metrics)",
           "ru": "Токен для Prometheus (/metrics)",
           "zh": "Prometheus 令牌（/metrics）"
         },
-        "help": {
-          "en": "16 characters or more. Prometheus sends it as a bearer token to the admin path's /metrics: per node, inbound and client network (AS number and name, never an address). Empty: no /metrics.",
-          "fa": "دست‌کم ۱۶ نویسه. Prometheus آن را به‌صورت bearer token به /metrics زیر مسیر ادمین می‌فرستد: به ازای نود، inbound و شبکهٔ کلاینت (شمارهٔ AS و نام، هرگز آدرس). خالی: بدون /metrics.",
-          "ru": "Не короче 16 символов. Prometheus передаёт его как bearer-токен на /metrics под путём админки: по узлу, inbound и сети клиента (номер AS и имя, никогда адрес). Пусто — без /metrics.",
-          "zh": "至少 16 个字符。Prometheus 将其作为 bearer 令牌发送到管理路径下的 /metrics：按节点、inbound 和客户端网络（AS 号和名称，绝无地址）。留空：不提供 /metrics。"
-        }
+        "type": "secret"
       },
       {
         "key": "telegram_token",
-        "type": "secret",
         "label": {
           "en": "Telegram bot token for alerts",
           "fa": "توکن ربات تلگرام برای هشدارها",
           "ru": "Токен бота Telegram для оповещений",
           "zh": "用于告警的 Telegram 机器人令牌"
-        }
+        },
+        "type": "secret"
       },
       {
         "key": "telegram_chat",
-        "type": "string",
         "label": {
           "en": "Telegram chat id for alerts",
           "fa": "شناسهٔ چت تلگرام برای هشدارها",
           "ru": "ID чата Telegram для оповещений",
           "zh": "用于告警的 Telegram 聊天 ID"
-        }
+        },
+        "type": "string"
       },
       {
         "key": "telegram_proxy",
-        "type": "string",
         "label": {
           "en": "Proxy for Telegram (socks5:// or http://)",
           "fa": "پراکسی برای تلگرام (socks5:// یا http://)",
           "ru": "Прокси для Telegram (socks5:// или http://)",
           "zh": "Telegram 代理（socks5:// 或 http://）"
-        }
+        },
+        "type": "string"
       },
       {
+        "help": {
+          "en": "Empty: Telegram. https://tapi.bale.ai sends the alerts through a Bale bot.",
+          "fa": "خالی: تلگرام. با https://tapi.bale.ai هشدارها از راه ربات بله فرستاده می‌شوند.",
+          "ru": "Пусто — Telegram. https://tapi.bale.ai — оповещения через бота Bale.",
+          "zh": "留空：Telegram。填 https://tapi.bale.ai 则通过 Bale 机器人发送告警。"
+        },
         "key": "telegram_api",
-        "type": "string",
         "label": {
           "en": "Bot API address (Bale or a mirror)",
           "fa": "آدرس Bot API (بله یا آینه)",
           "ru": "Адрес Bot API (Bale или зеркало)",
           "zh": "Bot API 地址（Bale 或镜像）"
         },
-        "help": {
-          "en": "Empty: Telegram. https://tapi.bale.ai sends the alerts through a Bale bot.",
-          "fa": "خالی: تلگرام. با https://tapi.bale.ai هشدارها از راه ربات بله فرستاده می‌شوند.",
-          "ru": "Пусто — Telegram. https://tapi.bale.ai — оповещения через бота Bale.",
-          "zh": "留空：Telegram。填 https://tapi.bale.ai 则通过 Bale 机器人发送告警。"
-        }
+        "type": "string"
       },
       {
-        "key": "language",
-        "type": "choice",
         "choices": [
           "en",
           "fa",
@@ -261,41 +258,45 @@
           "zh"
         ],
         "default": "en",
+        "key": "language",
         "label": {
           "en": "Language of the alerts",
           "fa": "زبان هشدارها",
           "ru": "Язык оповещений",
           "zh": "告警语言"
-        }
+        },
+        "type": "choice"
       }
     ]
   },
+  "license": "AGPL-3.0",
+  "name": "NX Insight",
+  "publisher": "NX",
+  "requires": {
+    "panel": "\u003e=0.2.0"
+  },
   "scopes": [
     {
-      "scope": "telemetry:read",
-      "purpose": "to read how your users' connections fare per node, inbound and client network; this turns the counting on while Insight runs"
+      "purpose": "to read how your users' connections fare per node, inbound and client network; this turns the counting on while Insight runs",
+      "scope": "telemetry:read"
     },
     {
-      "scope": "telemetry:write",
-      "purpose": "to put the links that work for each client network first in its subscriptions"
+      "purpose": "to put the links that work for each client network first in its subscriptions",
+      "scope": "telemetry:write"
     },
     {
-      "scope": "nodes:read",
-      "purpose": "to learn each node's address, so its host network and city can be shown"
+      "purpose": "to learn each node's address, so its host network and city can be shown",
+      "scope": "nodes:read"
     },
     {
-      "scope": "tunnels:read",
-      "purpose": "to see whether each tunnel between your nodes has a link, so a cut tunnel is not mistaken for blocked inbounds on its relay"
+      "purpose": "to see whether each tunnel between your nodes has a link, so a cut tunnel is not mistaken for blocked inbounds on its relay",
+      "scope": "tunnels:read"
     }
   ],
-  "events": [
-    "panel.addon_removed"
-  ],
-  "webhook": "/nx/events",
   "setup": "/nx/setup",
-  "health": "/health",
-  "requires": {
-    "panel": ">=0.1.3"
-  },
-  "ui": "/"
+  "signature": "y7u2Oy1BPT//CBNOf9ZHOhCzF2tsWFoZeLq0UrZ7/MmZfv/YO10mndczIEIUSrPuuRM+oAeeZs0ZiVU0TGQGDA==",
+  "slug": "insight",
+  "ui": "/",
+  "version": "0.0.1",
+  "webhook": "/nx/events"
 }

@@ -3,7 +3,7 @@
 # by the panel over SSH (the same way it installs a node). Run it as root.
 #
 #   sh install.sh --method docker --opt port=8099 --panel-url https://panel.example --claim-code ABC123
-#   sh install.sh --method script --version v0.1.0 --opt base_path=k3x9q2
+#   sh install.sh --method script --version v0.0.1 --opt base_path=k3x9q2
 #   sh install.sh --uninstall [--purge]
 #
 # --method script   the binary under a systemd unit (no Docker needed)
