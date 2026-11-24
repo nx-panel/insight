@@ -40,7 +40,7 @@ func Seed(i int) []byte {
 type fakePanel struct{}
 
 func (fakePanel) Put(context.Context, string, any, any) error { return nil }
-func (fakePanel) Delete(context.Context, string) error         { return nil }
+func (fakePanel) Delete(context.Context, string) error        { return nil }
 
 type noState struct{}
 
@@ -54,10 +54,14 @@ func install(t *testing.T, i int, url string, hour int64, success uint64) *cloud
 		t.Fatal(err)
 	}
 	cells := []model.PathHour{
-		{Hour: hour, PathCell: model.PathCell{NodeID: 1, Inbound: fmt.Sprintf("reality-%d", i), ClientASN: 197207, Country: "IR", Region: "Tehran", Network: "tcp"},
-			PathCounters: model.PathCounters{Accepted: 100, Authed: success, FailedTLS: 100 - success, EarlyClose: 40, RTTSum: 150 * success, RTTN: success}},
-		{Hour: hour, PathCell: model.PathCell{NodeID: 1, Inbound: fmt.Sprintf("xhttp-cdn-%d", i), ClientASN: 197207, Country: "IR", Region: "Tehran", Network: "tcp"},
-			PathCounters: model.PathCounters{Accepted: 80, Authed: 4, FailedTLS: 76}},
+		{
+			Hour: hour, PathCell: model.PathCell{NodeID: 1, Inbound: fmt.Sprintf("reality-%d", i), ClientASN: 197207, Country: "IR", Region: "Tehran", Network: "tcp"},
+			PathCounters: model.PathCounters{Accepted: 100, Authed: success, FailedTLS: 100 - success, EarlyClose: 40, RTTSum: 150 * success, RTTN: success},
+		},
+		{
+			Hour: hour, PathCell: model.PathCell{NodeID: 1, Inbound: fmt.Sprintf("xhttp-cdn-%d", i), ClientASN: 197207, Country: "IR", Region: "Tehran", Network: "tcp"},
+			PathCounters: model.PathCounters{Accepted: 80, Authed: 4, FailedTLS: 76},
+		},
 	}
 	must(t, gdb.Create(&cells).Error)
 	must(t, gdb.Create(&model.NodeNetinfo{NodeID: 1, Name: fmt.Sprintf("node-%d", i), Address: "203.0.113.1", ASN: 24940, Org: "HETZNER-AS", Country: "DE"}).Error)
