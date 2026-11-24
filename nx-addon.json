@@ -281,7 +281,7 @@
       "scope": "telemetry:read"
     },
     {
-      "purpose": "to put the links that work for each client network first in its subscriptions",
+      "purpose": "to put the links that work for each client network first in its subscriptions, and, only if you turn Mode B on, to register the key its batches to NX are signed with",
       "scope": "telemetry:write"
     },
     {
