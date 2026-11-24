@@ -28,6 +28,7 @@ func (s *Server) mountData(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/suggestions", s.signedIn(s.handleSuggestions))
 	mux.HandleFunc("GET /api/endpoints", s.signedIn(s.handleEndpoints))
 	s.mountAI(mux)
+	s.mountCloud(mux)
 }
 
 // endpointView is one endpoint's suspicion (detect.Suspicion) with whether

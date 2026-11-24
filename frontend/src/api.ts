@@ -272,6 +272,79 @@ export interface Override {
   city: string
 }
 
+// Mode B (internal/cloud).
+export interface CloudBatch {
+  hour: number
+  cells: number
+  createdAt: number
+  attempts: number
+  nextAt: number
+  sentAt: number
+  lastError: string
+}
+
+export interface CloudCell {
+  asn: number
+  cc: string
+  region: string
+  org: string
+  node_asn: number
+  node_cc: string
+  node_org: string
+  proto: string
+  transport: string
+  security: string
+  front: string
+  network: string
+  verdict: 'ok' | 'degraded' | 'asn_outage' | 'tunnel_down' | 'node_blocked'
+  accepted: number
+  authed: number
+}
+
+export interface CloudFinding {
+  code:
+    | 'asn_outage'
+    | 'strategy_blocked'
+    | 'strategy_degraded'
+    | 'strategy_works'
+    | 'throttled'
+    | 'hosting_blocked'
+    | 'probing'
+    | 'all_clear'
+  severity: 'info' | 'warn' | 'critical'
+  asn: number
+  org: string
+  strategy: string
+  node_asn: number
+  confidence: number
+}
+
+export interface CloudReport {
+  v: number
+  extracted_at: number
+  tier: 'full' | 'disruption'
+  countries: {
+    cc: string
+    from: number
+    to: number
+    contributors: string
+    findings: CloudFinding[]
+  }[]
+}
+
+export interface CloudState {
+  on: boolean
+  url: string
+  fingerprint: string
+  registered: boolean
+  error?: string
+  pending: number
+  failed: number
+  lastSent: CloudBatch | null
+  recent: CloudBatch[]
+  report: { report: CloudReport | null; checkedAt: number; latest: number; error?: string }
+}
+
 export const api = {
   login: (username: string, password: string) =>
     call<Me | { mfa: true; token: string }>('POST', '/login', { username, password }),
@@ -297,4 +370,8 @@ export const api = {
   aiReports: () =>
     call<{ reports: AIReport[]; orgs: Record<string, string> }>('GET', '/ai/reports'),
   runAI: (country: string) => call<{ started: boolean }>('POST', '/ai/run', { country }),
+  cloud: () => call<CloudState>('GET', '/cloud'),
+  setCloud: (on: boolean) => call<CloudState>('PUT', '/cloud', { on }),
+  cloudBatch: (hour: number) => call<{ cells: CloudCell[] }>('GET', `/cloud/batches/${hour}`),
+  cloudReport: () => call<CloudState>('POST', '/cloud/report'),
 }

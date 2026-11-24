@@ -8,6 +8,7 @@ import Alerts from './views/Alerts.vue'
 import Probing from './views/Probing.vue'
 import Analysis from './views/Analysis.vue'
 import Security from './views/Security.vue'
+import Cloud from './views/Cloud.vue'
 
 export const router = createRouter({
   // Relative to wherever Insight is served, the way its assets are.
@@ -23,6 +24,7 @@ export const router = createRouter({
         { path: 'probing', name: 'probing', component: Probing },
         { path: 'analysis', name: 'analysis', component: Analysis },
         { path: 'alerts', name: 'alerts', component: Alerts },
+        { path: 'nx', name: 'cloud', component: Cloud },
         { path: 'security', name: 'security', component: Security },
       ],
     },

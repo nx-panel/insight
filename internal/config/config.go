@@ -87,6 +87,8 @@ type Config struct {
 	// MetricsToken is the bearer token GET /metrics asks for (P28); empty
 	// turns the route off.
 	MetricsToken string
+	// CloudURL is NX's cloud for Mode B; "" is internal/cloud.DefaultURL.
+	CloudURL string
 }
 
 // MinMetricsToken is the shortest metrics token taken: it guards the
@@ -113,6 +115,9 @@ func Load() (Config, error) {
 		Listen:         strings.Trim(strings.TrimSpace(addon.Option("listen")), "[]"),
 		ASNURL:         option("asn_url", DefaultASNURL),
 		CityURL:        option("city_url", DefaultCityURL),
+		// CloudURL is NX's cloud for Mode B (internal/cloud); not an
+		// install question — a test or a local cloud sets NX_CLOUD_URL.
+		CloudURL: os.Getenv("NX_CLOUD_URL"),
 	}
 	c.TelegramToken = strings.TrimSpace(addon.Option("telegram_token"))
 	c.TelegramProxy = strings.TrimSpace(addon.Option("telegram_proxy"))

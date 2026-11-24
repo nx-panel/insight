@@ -256,7 +256,21 @@ type Session struct {
 	ExpiresAt int64  `gorm:"not null"`
 }
 
+// CloudOutbox is one hour's batch, waiting or sent.
+type CloudOutbox struct {
+	Hour      int64  `json:"hour" gorm:"primaryKey;autoIncrement:false"`
+	Body      []byte `json:"-" gorm:"not null"` // gzipped JSON, as signed and sent
+	Cells     int    `json:"cells" gorm:"not null"`
+	CreatedAt int64  `json:"createdAt" gorm:"not null"`
+	Attempts  int    `json:"attempts" gorm:"not null;default:0"`
+	NextAt    int64  `json:"nextAt" gorm:"not null;default:0"`
+	SentAt    int64  `json:"sentAt" gorm:"not null;default:0"`
+	LastError string `json:"lastError" gorm:"not null;default:''"`
+}
+
+func (CloudOutbox) TableName() string { return "cloud_outbox" }
+
 // All is every table, for the migration.
 func All() []any {
-	return []any{&PathHour{}, &PathDay{}, &PathSigHour{}, &TunnelHour{}, &NodeNetinfo{}, &State{}, &Admin{}, &Session{}}
+	return []any{&PathHour{}, &PathDay{}, &PathSigHour{}, &TunnelHour{}, &CloudOutbox{}, &NodeNetinfo{}, &State{}, &Admin{}, &Session{}}
 }

@@ -23,6 +23,7 @@ const nav = computed(() => [
   { to: { name: 'probing' }, icon: 'pi pi-eye', label: t('nav.probing') },
   { to: { name: 'analysis' }, icon: 'pi pi-sparkles', label: t('nav.analysis') },
   { to: { name: 'alerts' }, icon: 'pi pi-bell', label: t('nav.alerts') },
+  { to: { name: 'cloud' }, icon: 'pi pi-globe', label: t('nav.cloud') },
   { to: { name: 'security' }, icon: 'pi pi-shield', label: t('nav.security') },
 ])
 

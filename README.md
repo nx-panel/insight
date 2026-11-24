@@ -21,7 +21,30 @@ alerts there were; each tunnel touching those nodes, by its name, with its
 relay and origin node numbers and whether it has a link. Never a client's or a node's address and never a node's
 name. Names are cut down to forty letters, digits, spaces, dashes and
 underscores before they go — no dots, so no address or URL as written — but a tag or a provider
-name still says what it spells, so mind what you put in them. Nothing goes to NX.
+name still says what it spells, so mind what you put in them. Nothing of
+this goes to NX.
+
+Mode B, off until you turn it on in the NX network page, shares this
+panel's counts with NX and brings back NX's regional report: which
+protocol shapes work, are degraded or are blocked for each network of your
+users' countries, pooled from many independent operators. Once an hour, for
+the hour just closed, it sends — signed with this install's key, which it
+registers with your panel and, through the panel, with NX's licence service
+— per client network (AS number, registered name, country, estimated
+region) and per hosting network of your nodes (AS number, name, country),
+per protocol shape (protocol, transport, TLS or REALITY, direct or through
+a CDN): connections accepted, authenticated and cut early, failures by
+class and by signature (bytes read, seconds to failure), replayed
+handshakes, round-trip and session-time sums, and Insight's own reading of
+the cell (fine, degraded, network outage, the node's address blocked, its
+tunnel down). Never a client's or a node's address, a node's name or
+number, an inbound's tag, a domain, an SNI, a path or your panel's address.
+The page shows every batch as it went out. Turning Mode B off removes the
+key from your panel and drops whatever had not been sent. NX publishes a
+report only from networks that at least five independent operators share;
+a panel without a licence receives outages and throttling only. Insight
+asks for a newer report when it starts and when you open the page,
+sending the time of the report it holds.
 
 With a metrics token set at install, `/metrics` under the admin path feeds
 your own Prometheus, per node, inbound and client network (AS number and
@@ -32,7 +55,7 @@ Client addresses never leave your server: the nodes report a /24 or /48
 prefix (/40 for a 6to4 address), Insight turns it into its network the moment it reads it and keeps
 nothing else.
 
-Status: in development (nx-panel `docs/path-telemetry.md`, phase 1). Needs a
+Status: in development (nx-panel `docs/path-telemetry.md`, phases 1 and 2). Needs a
 panel and nodes with path telemetry (panel 0.2.0 or later).
 
 ## Data

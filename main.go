@@ -41,6 +41,7 @@ import (
 	"github.com/nx-panel/insight/internal/admins"
 	"github.com/nx-panel/insight/internal/ai"
 	"github.com/nx-panel/insight/internal/alert"
+	"github.com/nx-panel/insight/internal/cloud"
 	"github.com/nx-panel/insight/internal/config"
 	"github.com/nx-panel/insight/internal/db"
 	"github.com/nx-panel/insight/internal/detect"
@@ -206,6 +207,19 @@ func run() error {
 	// Mode A: the admin's own model reads the paths after a flush when a
 	// pass is due (internal/ai); off until the admin sets it up.
 	brain := &ai.Runner{DB: gdb, State: det, Org: net.Org, Countries: cfg.RegionCountries, Tunnels: tw.Views}
+	// Mode B: the closed hours to NX's cloud and its report back, off until
+	// the admin turns it on (internal/cloud).
+	nx := &cloud.Cloud{
+		DB: gdb, URL: cfg.CloudURL,
+		Sources: cloud.Sources{DB: gdb, State: det, Shapes: in.Shapes, Tunnels: tw.Views, Org: net.Org, Version: a.Manifest().Version},
+		Panel: func() cloud.Panel {
+			c := a.Credentials()
+			if c == nil || c.Token == "" {
+				return nil
+			}
+			return &panel.Client{Base: c.Panel.URL, Token: c.Token}
+		},
+	}
 	flushed := in.AfterFlush
 	in.AfterFlush = func(ctx context.Context) {
 		flushed(ctx)
@@ -222,6 +236,7 @@ func run() error {
 	work.Go(func() { mgr.Run(bg) })
 	work.Go(func() { in.Run(bg) })
 	work.Go(func() { tw.Run(bg) })
+	work.Go(func() { nx.Run(bg) })
 	work.Go(func() { every(bg, nodesEvery, refreshNodes) })
 	work.Go(func() {
 		every(bg, compactEvery, func() {
@@ -243,7 +258,7 @@ func run() error {
 			spa = sub
 		}
 	}
-	app := web.New(gdb, a, cfg, a.Manifest().Version, spa, web.Parts{Ingest: in, Detect: det, Net: net, AI: brain, Countries: cfg.RegionCountries, Tunnels: tw})
+	app := web.New(gdb, a, cfg, a.Manifest().Version, spa, web.Parts{Ingest: in, Detect: det, Net: net, AI: brain, Countries: cfg.RegionCountries, Tunnels: tw, Cloud: nx})
 	srv := &http.Server{
 		Addr: cfg.Addr(), Handler: app.Handler(),
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute,
