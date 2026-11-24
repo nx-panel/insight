@@ -248,7 +248,7 @@ func (c *Cloud) register(ctx context.Context) error {
 	}
 	p := c.panel()
 	if p == nil {
-		return errors.New("not registered with a panel yet")
+		return errors.New("Insight is not registered with a panel yet")
 	}
 	proof := base64.StdEncoding.EncodeToString(ed25519.Sign(k, []byte(ProofContext+pub)))
 	if err := p.Put(ctx, "/telemetry/contributor-key", map[string]string{"public_key": pub, "proof": proof}, nil); err != nil {
