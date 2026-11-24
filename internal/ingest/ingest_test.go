@@ -616,3 +616,57 @@ func TestTunnelLinksAndShapesAreRead(t *testing.T) {
 		t.Fatalf("%d tunnel rows outlived their retention", n)
 	}
 }
+
+// TestFailureSignaturesAreKeptPerCell: the panel relays each failure's
+// signature (PT12); Insight keeps them by cell and hour in path_sig_hours,
+// adds across flushes, refuses keys no node sends, and drops them with the
+// hours (nx-panel docs/path-telemetry.md PT19).
+func TestFailureSignaturesAreKeptPerCell(t *testing.T) {
+	gdb := openDB(t)
+	fp := &fakePanel{}
+	in := &Ingest{Now: atHour, DB: gdb, Net: netDB(t), Panel: func() Getter { return fp }}
+	fp.add(Sample{
+		NodeID: 3, DateTime: hour + 60, Inbound: "vless-reality", Network: "tcp", Prefix: "5.160.7.0/24",
+		SourceKind: "peer", Accepted: 4, Failed: map[string]uint32{"tls": 3},
+		FailedSig: map[string]uint32{"tls/0/0": 2, "tls/64/1": 1, "made/up/key": 9},
+	})
+	if err := in.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := in.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	fp.add(Sample{
+		NodeID: 3, DateTime: hour + 120, Inbound: "vless-reality", Network: "tcp", Prefix: "5.160.8.0/24",
+		SourceKind: "peer", Accepted: 1, FailedSig: map[string]uint32{"tls/0/0": 5},
+	})
+	if err := in.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := in.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var sigs []model.PathSigHour
+	if err := gdb.Order("sig").Find(&sigs).Error; err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]uint64{}
+	for _, s := range sigs {
+		if s.Hour != hour || s.NodeID != 3 || s.ClientASN != 44244 {
+			t.Errorf("signature row %+v is not the cell's", s)
+		}
+		got[s.Sig] = s.N
+	}
+	if len(got) != 2 || got["tls/0/0"] != 7 || got["tls/64/1"] != 1 {
+		t.Fatalf("signatures = %v, want tls/0/0=7 and tls/64/1=1, the made-up key dropped", got)
+	}
+
+	if err := Compact(t.Context(), gdb, time.Unix(hour, 0).AddDate(0, 0, PathHourDays+2)); err != nil {
+		t.Fatal(err)
+	}
+	var left int64
+	gdb.Model(&model.PathSigHour{}).Count(&left)
+	if left != 0 {
+		t.Errorf("%d signature rows outlived their hours", left)
+	}
+}

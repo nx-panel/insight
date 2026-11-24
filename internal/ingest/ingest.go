@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"net/http"
 	"net/netip"
 	"sort"
@@ -66,15 +67,18 @@ type Getter interface {
 
 // Sample is one panel sample as polled.
 type Sample struct {
-	Cursor       uint64            `json:"cursor"`
-	NodeID       uint              `json:"node_id"`
-	DateTime     int64             `json:"date_time"`
-	Inbound      string            `json:"inbound"`
-	Network      string            `json:"network"`
-	Prefix       string            `json:"prefix"`
-	SourceKind   string            `json:"source_kind"`
-	Accepted     uint32            `json:"accepted"`
-	Failed       map[string]uint32 `json:"failed"`
+	Cursor     uint64            `json:"cursor"`
+	NodeID     uint              `json:"node_id"`
+	DateTime   int64             `json:"date_time"`
+	Inbound    string            `json:"inbound"`
+	Network    string            `json:"network"`
+	Prefix     string            `json:"prefix"`
+	SourceKind string            `json:"source_kind"`
+	Accepted   uint32            `json:"accepted"`
+	Failed     map[string]uint32 `json:"failed"`
+	// FailedSig counts the failures by signature,
+	// "<class>/<bytes>/<seconds>" (nx-panel docs/path-telemetry.md PT12).
+	FailedSig    map[string]uint32 `json:"failed_sig"`
 	Authed       uint32            `json:"authed"`
 	EarlyClose   uint32            `json:"early_close"`
 	Replayed     uint32            `json:"replayed"`
@@ -533,6 +537,15 @@ func add(c *model.PathCounters, s Sample) {
 	}
 	c.Up += s.Up
 	c.Down += s.Down
+	for sig, n := range s.FailedSig {
+		if n == 0 || !model.ValidSig(sig) {
+			continue
+		}
+		if c.Sigs == nil {
+			c.Sigs = map[string]uint64{}
+		}
+		c.Sigs[sig] += uint64(n)
+	}
 }
 
 func (in *Ingest) loadCursor() error {
@@ -575,6 +588,9 @@ func (in *Ingest) Flush(ctx context.Context) error {
 		for k, c := range folded {
 			row := model.PathHour{Hour: k.hour, PathCell: k.PathCell, PathCounters: *c}
 			if err := UpsertAdd(tx, &row, "hour"); err != nil {
+				return err
+			}
+			if err := upsertSigs(tx, k.hour, k.PathCell, c.Sigs); err != nil {
 				return err
 			}
 		}
@@ -659,6 +675,10 @@ func (in *Ingest) fold(tx *gorm.DB, pending map[cellKey]*model.PathCounters) (ma
 			addCounters(have, pending[k])
 		} else {
 			c := *pending[k]
+			// The signatures are a map: a copy of the struct would share it,
+			// and a failed flush puts pending back, so adding the next cell
+			// into this one must not reach pending's.
+			c.Sigs = maps.Clone(c.Sigs)
 			out[dest] = &c
 		}
 	}
@@ -730,6 +750,37 @@ func addCounters(a, b *model.PathCounters) {
 	a.RetransN += b.RetransN
 	a.Up += b.Up
 	a.Down += b.Down
+	for sig, n := range b.Sigs {
+		if a.Sigs == nil {
+			a.Sigs = map[string]uint64{}
+		}
+		a.Sigs[sig] += n
+	}
+}
+
+// upsertSigs adds a cell's failure signatures into path_sig_hours.
+func upsertSigs(tx *gorm.DB, hour int64, cell model.PathCell, sigs map[string]uint64) error {
+	if len(sigs) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(sigs))
+	for k := range sigs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	cols := []clause.Column{{Name: "hour"}}
+	for _, c := range []string{"node_id", "inbound", "client_asn", "country", "region", "network", "source_kind", "sig"} {
+		cols = append(cols, clause.Column{Name: c})
+	}
+	for _, k := range keys {
+		row := model.PathSigHour{Hour: hour, PathCell: cell, Sig: k, N: sigs[k]}
+		if err := tx.Clauses(clause.OnConflict{Columns: cols, DoUpdates: clause.Assignments(map[string]any{
+			"n": gorm.Expr("path_sig_hours.n + excluded.n"),
+		})}).Create(&row).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // counterColumns are the additive columns, for the upsert.

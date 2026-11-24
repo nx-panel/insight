@@ -71,6 +71,7 @@ func Migrate(gdb *gorm.DB) error {
 	for _, stmt := range []string{
 		"CREATE UNIQUE INDEX IF NOT EXISTS path_hours_cell ON path_hours (hour, " + cellColumns + ")",
 		"CREATE UNIQUE INDEX IF NOT EXISTS path_days_cell ON path_days (day, " + cellColumns + ")",
+		"CREATE UNIQUE INDEX IF NOT EXISTS path_sig_hours_cell ON path_sig_hours (hour, " + cellColumns + ", sig)",
 	} {
 		if err := gdb.Exec(stmt).Error; err != nil {
 			return fmt.Errorf("migrate: %w", err)

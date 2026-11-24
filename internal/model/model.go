@@ -5,6 +5,8 @@
 package model
 
 import (
+	"strings"
+
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -46,6 +48,11 @@ type PathCounters struct {
 
 	Up   int64 `json:"up"`
 	Down int64 `json:"down"`
+
+	// Sigs counts the failures by signature, "<class>/<bytes>/<seconds>"
+	// (nx-panel docs/path-telemetry.md PT12), on their way to
+	// path_sig_hours; never a column of the cell.
+	Sigs map[string]uint64 `json:"-" gorm:"-"`
 }
 
 // PathCell names one cell: when, which node and inbound, which client
@@ -73,6 +80,36 @@ type PathHour struct {
 }
 
 func (PathHour) TableName() string { return "path_hours" }
+
+// PathSigHour is one failure signature of one cell over one hour, kept
+// PathHourDays days like the hours: the signatures exist for Mode B's
+// batches (nx-panel docs/path-telemetry.md P23, PT19), which only send the
+// hour just closed, so they are not folded into days.
+type PathSigHour struct {
+	ID   uint  `json:"id" gorm:"primaryKey"`
+	Hour int64 `json:"hour" gorm:"not null"`
+	PathCell
+	Sig string `json:"sig" gorm:"not null;size:32"`
+	N   uint64 `json:"n" gorm:"not null"`
+}
+
+func (PathSigHour) TableName() string { return "path_sig_hours" }
+
+// sigClasses are the failure classes a node counts by signature, and
+// sigBytes and sigSeconds the lower edges of their buckets
+// (nx-panel pkg/coreapi PathSample.FailedSig).
+var (
+	sigClasses = map[string]bool{"tls": true, "auth": true, "timeout": true, "reset": true, "eof": true, "ingress_noroute": true, "quic_initial_bad": true}
+	sigBytes   = map[string]bool{"0": true, "1": true, "64": true, "1024": true}
+	sigSeconds = map[string]bool{"0": true, "1": true, "5": true, "30": true}
+)
+
+// ValidSig reports whether s is a signature a node sends: a known class and
+// bucket edges, so a panel cannot grow the table with made-up keys.
+func ValidSig(s string) bool {
+	parts := strings.Split(s, "/")
+	return len(parts) == 3 && sigClasses[parts[0]] && sigBytes[parts[1]] && sigSeconds[parts[2]]
+}
 
 // PathDay is one cell over one day (UTC), kept PathDayDays days.
 type PathDay struct {
@@ -221,5 +258,5 @@ type Session struct {
 
 // All is every table, for the migration.
 func All() []any {
-	return []any{&PathHour{}, &PathDay{}, &TunnelHour{}, &NodeNetinfo{}, &State{}, &Admin{}, &Session{}}
+	return []any{&PathHour{}, &PathDay{}, &PathSigHour{}, &TunnelHour{}, &NodeNetinfo{}, &State{}, &Admin{}, &Session{}}
 }

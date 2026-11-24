@@ -59,6 +59,11 @@ func Compact(ctx context.Context, db *gorm.DB, now time.Time) error {
 			break
 		}
 	}
+	// The signatures are kept as long as the hours, and not folded (Mode B
+	// sends the hour just closed).
+	if err := db.WithContext(ctx).Where("hour < ?", cut).Delete(&model.PathSigHour{}).Error; err != nil {
+		return err
+	}
 	dayCut := now.UTC().Truncate(24*time.Hour).AddDate(0, 0, -PathDayDays).Unix()
 	if err := db.WithContext(ctx).Where("day < ?", dayCut).Delete(&model.PathDay{}).Error; err != nil {
 		return err
