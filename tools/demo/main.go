@@ -78,16 +78,29 @@ type node struct {
 type inbound struct{ tag, network string }
 
 var nodes = []node{
-	{1, "de-fra-1", "203.0.113.10", 24940, "HETZNER-AS Hetzner Online GmbH", "DE", "Frankfurt am Main",
-		[]inbound{{"vless-reality", "tcp"}, {"vless-xhttp-cdn", "tcp"}, {"hysteria2", "udp"}}, nil,
-		map[string]map[uint32]bool{"hysteria2": {197207: true, 58224: true}}},
-	{2, "nl-ams-1", "203.0.113.20", 14061, "DIGITALOCEAN-ASN DigitalOcean, LLC", "NL", "Amsterdam",
-		[]inbound{{"vless-reality", "tcp"}, {"trojan-ws", "tcp"}}, map[uint32]bool{44244: true}, nil},
-	{3, "fi-hel-1", "198.51.100.30", 24940, "HETZNER-AS Hetzner Online GmbH", "FI", "Helsinki",
-		[]inbound{{"vless-reality", "tcp"}, {"hysteria2", "udp"}}, nil,
-		map[string]map[uint32]bool{"vless-reality": {197207: true}}},
-	{4, "ir-thr-relay", "192.0.2.40", 43754, "ASIATECH-AS Asiatech Data Transmission company", "IR", "Tehran",
-		[]inbound{{"vless-reality", "tcp"}}, nil, nil},
+	{
+		1, "de-fra-1", "203.0.113.10", 24940, "HETZNER-AS Hetzner Online GmbH", "DE", "Frankfurt am Main",
+		[]inbound{{"vless-reality", "tcp"}, {"vless-xhttp-cdn", "tcp"}, {"hysteria2", "udp"}},
+		nil,
+		map[string]map[uint32]bool{"hysteria2": {197207: true, 58224: true}},
+	},
+	{
+		2, "nl-ams-1", "203.0.113.20", 14061, "DIGITALOCEAN-ASN DigitalOcean, LLC", "NL", "Amsterdam",
+		[]inbound{{"vless-reality", "tcp"}, {"trojan-ws", "tcp"}},
+		map[uint32]bool{44244: true},
+		nil,
+	},
+	{
+		3, "fi-hel-1", "198.51.100.30", 24940, "HETZNER-AS Hetzner Online GmbH", "FI", "Helsinki",
+		[]inbound{{"vless-reality", "tcp"}, {"hysteria2", "udp"}},
+		nil,
+		map[string]map[uint32]bool{"vless-reality": {197207: true}},
+	},
+	{
+		4, "ir-thr-relay", "192.0.2.40", 43754, "ASIATECH-AS Asiatech Data Transmission company", "IR", "Tehran",
+		[]inbound{{"vless-reality", "tcp"}},
+		nil, nil,
+	},
 }
 
 func main() {
