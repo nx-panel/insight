@@ -273,7 +273,7 @@
   "name": "NX Insight",
   "publisher": "NX",
   "requires": {
-    "panel": "\u003e=0.2.0"
+    "panel": "\u003e=0.2.1"
   },
   "scopes": [
     {

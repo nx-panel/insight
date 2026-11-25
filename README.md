@@ -71,7 +71,7 @@ prefix (/40 for a 6to4 address), Insight turns it into its network the moment it
 nothing else.
 
 Status: in development. Needs a
-panel and nodes with path telemetry (panel 0.2.0 or later).
+panel and nodes with path telemetry (panel 0.2.1 or later).
 
 ## Data
 
