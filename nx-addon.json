@@ -294,9 +294,9 @@
     }
   ],
   "setup": "/nx/setup",
-  "signature": "y7u2Oy1BPT//CBNOf9ZHOhCzF2tsWFoZeLq0UrZ7/MmZfv/YO10mndczIEIUSrPuuRM+oAeeZs0ZiVU0TGQGDA==",
+  "signature": "Kp0y6gToKC+Q2m8OHzUfYQ3kzYERp+TFOKQg8k+k6gUziMxz7MUlAW2s0nthRPkNdch1aHflCU6fIXk/CWirDA==",
   "slug": "insight",
   "ui": "/",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "webhook": "/nx/events"
 }
