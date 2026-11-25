@@ -7,7 +7,7 @@ import Nodes from './views/Nodes.vue'
 import Alerts from './views/Alerts.vue'
 import Probing from './views/Probing.vue'
 import Analysis from './views/Analysis.vue'
-import Security from './views/Security.vue'
+import Settings from './views/Settings.vue'
 import Cloud from './views/Cloud.vue'
 
 export const router = createRouter({
@@ -25,7 +25,9 @@ export const router = createRouter({
         { path: 'analysis', name: 'analysis', component: Analysis },
         { path: 'alerts', name: 'alerts', component: Alerts },
         { path: 'nx', name: 'cloud', component: Cloud },
-        { path: 'security', name: 'security', component: Security },
+        { path: 'settings', name: 'settings', component: Settings },
+        // The account's page moved onto the settings page.
+        { path: 'security', redirect: { name: 'settings', query: { tab: 'account' } } },
       ],
     },
   ],

@@ -4,29 +4,22 @@ import { useI18n } from 'vue-i18n'
 import Button from 'primevue/button'
 import Message from 'primevue/message'
 import SelectButton from 'primevue/selectbutton'
-import Tag from 'primevue/tag'
 import { useToast } from 'primevue/usetoast'
-import { api, type CloudCell, type CloudFinding, type CloudState } from '../api'
-import { asnLabel, num, when } from '../format'
+import { api, type CloudCell, type CloudState } from '../api'
+import { num, when } from '../format'
+import NetName from '../components/NetName.vue'
 
-// Mode B (internal/cloud): the switch, what went out, NX's report. Opening
-// this page is also when Insight asks NX for a newer report.
+// Mode B (internal/cloud): the switch and what went out; NX's report is on
+// the AI analysis page. Opening this page is also when Insight asks NX for
+// a newer report.
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const toast = useToast()
 const state = ref<CloudState | null>(null)
 const error = ref('')
 const busy = ref(false)
 const open = ref<number | null>(null)
 const cells = ref<CloudCell[]>([])
-
-function countryName(code: string) {
-  try {
-    return new Intl.DisplayNames([locale.value], { type: 'region' }).of(code) ?? code
-  } catch {
-    return code
-  }
-}
 
 async function load() {
   try {
@@ -59,17 +52,6 @@ async function setOn(on: boolean) {
   }
 }
 
-async function ask() {
-  busy.value = true
-  try {
-    state.value = await api.cloudReport()
-  } catch (e) {
-    fail(e)
-  } finally {
-    busy.value = false
-  }
-}
-
 async function show(hour: number) {
   if (open.value === hour) {
     open.value = null
@@ -88,8 +70,6 @@ const on = computed({
   set: (v: boolean) => void setOn(v),
 })
 
-const report = computed(() => state.value?.report.report ?? null)
-
 function batchState(b: CloudState['recent'][number]) {
   if (b.sentAt) return 'sent'
   return b.nextAt > 1e15 ? 'refused' : 'pending'
@@ -97,27 +77,6 @@ function batchState(b: CloudState['recent'][number]) {
 
 const shape = (c: { proto: string; transport: string; security: string; front: string }) =>
   [c.proto, c.transport, c.security, c.front].filter((x) => x && x !== 'none').join(' · ')
-
-function strategy(s: string) {
-  const [proto, transport, security, front] = s.split('/')
-  return shape({
-    proto: proto ?? '',
-    transport: transport === '-' ? '' : (transport ?? ''),
-    security: security ?? '',
-    front: front ?? '',
-  })
-}
-
-function sentence(f: CloudFinding) {
-  return t('cloud.finding.' + f.code, {
-    asn: asnLabel(f.asn, f.org),
-    strategy: strategy(f.strategy),
-    host: 'AS' + f.node_asn,
-  })
-}
-
-const severity = (s: CloudFinding['severity']) =>
-  s === 'critical' ? 'danger' : s === 'warn' ? 'warn' : 'info'
 </script>
 
 <template>
@@ -211,10 +170,10 @@ const severity = (s: CloudFinding['severity']) =>
                   <tbody>
                     <tr v-for="(c, i) in cells" :key="i">
                       <td>
-                        {{ asnLabel(c.asn, c.org) }} · {{ c.cc
+                        <NetName :asn="c.asn" :org="c.org" /> · {{ c.cc
                         }}{{ c.region ? ' · ' + c.region : '' }}
                       </td>
-                      <td>{{ asnLabel(c.node_asn, c.node_org) }} · {{ c.node_cc }}</td>
+                      <td><NetName :asn="c.node_asn" :org="c.node_org" /> · {{ c.node_cc }}</td>
                       <td class="ltr">{{ shape(c) }} · {{ c.network }}</td>
                       <td>{{ t('cloud.verdicts.' + c.verdict) }}</td>
                       <td>{{ num(c.accepted) }}</td>
@@ -229,59 +188,10 @@ const severity = (s: CloudFinding['severity']) =>
       </table>
     </section>
 
-    <section v-if="state" class="card stack">
-      <div class="head">
-        <h2>{{ t('cloud.report') }}</h2>
-        <Button
-          :label="t('cloud.checkNow')"
-          size="small"
-          :loading="busy"
-          :disabled="!state.on || busy"
-          @click="ask"
-        />
-      </div>
-      <p class="muted">{{ t('cloud.reportIntro') }}</p>
-      <Message v-if="state.on && state.report.error" severity="warn" :closable="false">
-        {{ state.report.error }}
-      </Message>
-      <p v-if="!report" class="muted">{{ t('cloud.noReport') }}</p>
-      <template v-else>
-        <p class="muted">
-          {{
-            t('cloud.extracted', {
-              at: when(report.extracted_at),
-              checked: when(state.report.checkedAt),
-            })
-          }}
-        </p>
-        <Message v-if="report.tier === 'disruption'" severity="info" :closable="false">
-          {{ t('cloud.tierDisruption') }}
-        </Message>
-        <Message severity="secondary" :closable="false">{{ t('cloud.estimate') }}</Message>
-        <div v-for="c in report.countries" :key="c.cc" class="stack">
-          <h3>
-            {{
-              t('cloud.country', {
-                c: countryName(c.cc),
-                n: c.contributors,
-                from: when(c.from),
-                to: when(c.to),
-              })
-            }}
-          </h3>
-          <p v-if="!c.findings.length" class="muted">{{ t('cloud.noFinding') }}</p>
-          <ul v-else class="findings">
-            <li v-for="(f, i) in c.findings" :key="i">
-              <Tag :severity="severity(f.severity)" :value="t('analysis.severity.' + f.severity)" />
-              <span>{{ sentence(f) }}</span>
-              <span class="muted">{{
-                t('analysis.confidence', { p: num(100 * f.confidence) })
-              }}</span>
-            </li>
-          </ul>
-        </div>
-      </template>
-    </section>
+    <Message v-if="state?.on" severity="info" :closable="false">
+      {{ t('cloud.reportMoved') }}
+      <RouterLink :to="{ name: 'analysis' }">{{ t('nav.analysis') }}</RouterLink>
+    </Message>
   </div>
 </template>
 

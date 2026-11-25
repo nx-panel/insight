@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 import PrimeVue from 'primevue/config'
 import ToastService from 'primevue/toastservice'
+import Tooltip from 'primevue/tooltip'
 import Aura from '@primeuix/themes/aura'
 import { definePreset } from '@primeuix/themes'
 import 'primeicons/primeicons.css'
@@ -41,6 +42,7 @@ createApp(App)
     license: import.meta.env.VITE_PRIMEUI_LICENSE,
   })
   .use(ToastService)
+  .directive('tooltip', Tooltip)
   .use(i18n)
   .use(router)
   .mount('#app')

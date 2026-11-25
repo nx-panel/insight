@@ -21,6 +21,7 @@ import (
 
 	"github.com/nx-panel/insight/internal/admins"
 	"github.com/nx-panel/insight/internal/ai"
+	"github.com/nx-panel/insight/internal/alert"
 	"github.com/nx-panel/insight/internal/cloud"
 	"github.com/nx-panel/insight/internal/config"
 	"github.com/nx-panel/insight/internal/detect"
@@ -28,6 +29,7 @@ import (
 	"github.com/nx-panel/insight/internal/metrics"
 	"github.com/nx-panel/insight/internal/model"
 	"github.com/nx-panel/insight/internal/netinfo"
+	"github.com/nx-panel/insight/internal/settings"
 	"github.com/nx-panel/insight/internal/tunnels"
 )
 
@@ -49,6 +51,8 @@ type Server struct {
 	tunnels   *tunnels.Watcher
 	cloud     *cloud.Cloud
 	countries []string
+	settings  *settings.Live
+	alerts    *alert.Live
 
 	mu      sync.Mutex
 	pending map[string]pendingLogin
@@ -75,6 +79,10 @@ type Parts struct {
 	Tunnels *tunnels.Watcher
 	// Cloud is Mode B (internal/cloud), nil for none.
 	Cloud *cloud.Cloud
+	// Settings are the ones the settings page changes, Alerts the sender
+	// they configure; nil for none (the install's options, unchangeable).
+	Settings *settings.Live
+	Alerts   *alert.Live
 }
 
 // New wires the server; spa is the built admin web, nil for none.
@@ -84,6 +92,7 @@ func New(gdb *gorm.DB, a *addon.Addon, cfg config.Config, version string, spa fs
 		logins:  auth.NewLimiter(5, 10*time.Minute),
 		pending: map[string]pendingLogin{}, enrol: map[uint]string{},
 		ingest: p.Ingest, detect: p.Detect, net: p.Net, ai: p.AI, tunnels: p.Tunnels, cloud: p.Cloud, countries: p.Countries,
+		settings: p.Settings, alerts: p.Alerts,
 	}
 	proxies, err := web.ParseProxies(cfg.TrustedProxies)
 	if err != nil {
@@ -119,7 +128,11 @@ func (s *Server) Handler() http.Handler {
 	if s.net != nil {
 		src.Org = s.net.Org
 	}
-	mux.HandleFunc("GET /metrics", metrics.Handler(s.cfg.MetricsToken, src))
+	token := func() string { return s.cfg.MetricsToken }
+	if s.settings != nil {
+		token = s.settings.MetricsToken
+	}
+	mux.HandleFunc("GET /metrics", metrics.Handler(token, src))
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeCode(w, http.StatusNotFound, "not_found", "no such API route")
 	})

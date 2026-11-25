@@ -30,6 +30,31 @@ export function asnLabel(asn: number, org: string) {
   return org ? `AS${asn} · ${org}` : `AS${asn}`
 }
 
+// asnShort is a network's short name: the first word of its registered
+// name without the "-AS" every registry tacks on ("MCCI-AS Mobile
+// Communication Company of Iran PLC" is MCCI), or its number when it has
+// no name. The full name and number are asnLabel's, for a tooltip.
+export function asnShort(asn: number, org: string) {
+  if (!asn) return i18n.global.t('matrix.otherAsn')
+  const first = (org || '').trim().split(/[\s,]+/)[0] ?? ''
+  const short = first.replace(/[-_]?AS(N)?[-_]?\d*$/i, '').replace(/[-_]+$/, '')
+  return short || first || `AS${asn}`
+}
+
+// countryName is a country's name in the admin's language, its code when
+// the browser has none.
+export function countryName(code: string) {
+  try {
+    return (
+      new Intl.DisplayNames([i18n.global.locale.value], { type: 'region' }).of(
+        code.toUpperCase(),
+      ) ?? code
+    )
+  } catch {
+    return code
+  }
+}
+
 // health is a success ratio's band, for the cell's colour.
 export function health(authed: number, accepted: number, degraded: boolean) {
   if (degraded) return 'bad'

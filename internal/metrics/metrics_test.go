@@ -31,10 +31,10 @@ func scrape(t *testing.T, h http.HandlerFunc, auth string) (int, string) {
 // TestMetricsNeedTheirToken: no token configured is no route; a wrong or
 // missing bearer is refused.
 func TestMetricsNeedTheirToken(t *testing.T) {
-	if code, _ := scrape(t, metrics.Handler("", metrics.Sources{}), "Bearer "); code != http.StatusNotFound {
+	if code, _ := scrape(t, metrics.Handler(func() string { return "" }, metrics.Sources{}), "Bearer "); code != http.StatusNotFound {
 		t.Fatalf("no token configured = %d, want 404", code)
 	}
-	h := metrics.Handler("a-token-long-enough", metrics.Sources{})
+	h := metrics.Handler(func() string { return "a-token-long-enough" }, metrics.Sources{})
 	for _, auth := range []string{"", "Bearer wrong", "a-token-long-enough", "Bearer a-token-long-enough "} {
 		if code, _ := scrape(t, h, auth); code != http.StatusUnauthorized {
 			t.Errorf("%q = %d, want 401", auth, code)

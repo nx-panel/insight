@@ -48,6 +48,7 @@ import (
 	"github.com/nx-panel/insight/internal/ingest"
 	"github.com/nx-panel/insight/internal/model"
 	"github.com/nx-panel/insight/internal/netinfo"
+	"github.com/nx-panel/insight/internal/settings"
 	"github.com/nx-panel/insight/internal/tunnels"
 	"github.com/nx-panel/insight/internal/web"
 )
@@ -145,7 +146,10 @@ func run() error {
 		}
 		return mgr.CityPath()
 	}
-	tg, err := alert.NewTelegram(cfg.TelegramToken, cfg.TelegramChat, cfg.TelegramProxy, cfg.TelegramAPI, cfg.Language, alert.Names{
+	// Alerts go through the sender in force: the install's bot and chat
+	// until the admin saves the settings page, theirs after, replaced
+	// without a restart (internal/settings).
+	tg := &alert.Live{Names: alert.Names{
 		Node: func(id uint) string {
 			var n model.NodeNetinfo
 			if gdb.Select("name").Limit(1).Find(&n, id).Error == nil {
@@ -154,9 +158,12 @@ func run() error {
 			return ""
 		},
 		ASN: net.Org,
-	})
-	if err != nil {
-		return fmt.Errorf("telegram_proxy: %w", err)
+	}}
+	live := &settings.Live{DB: gdb, Install: settings.FromConfig(cfg), Applied: func(v settings.Values) error {
+		return tg.Set(v.TelegramToken, v.TelegramChat, v.TelegramProxy, v.TelegramAPI, v.Language)
+	}}
+	if err := live.Start(context.Background()); err != nil {
+		return fmt.Errorf("settings: %w", err)
 	}
 	bg, stopBg := context.WithCancel(context.Background())
 	defer stopBg()
@@ -165,33 +172,33 @@ func run() error {
 	// seconds an alert would hold the next polls back past what the panel
 	// keeps, and the hole would read as more drops. A burst past the queue
 	// loses its oldest sends; every alert is in the database either way.
-	var send func(context.Context, detect.Alert)
-	if tg != nil {
-		queue := make(chan detect.Alert, 256)
-		send = func(_ context.Context, a detect.Alert) {
-			for {
-				select {
-				case queue <- a:
-					return
-				default:
-				}
-				select {
-				case <-queue:
-				default:
-				}
+	queue := make(chan detect.Alert, 256)
+	send := func(_ context.Context, a detect.Alert) {
+		if tg.Current() == nil {
+			return
+		}
+		for {
+			select {
+			case queue <- a:
+				return
+			default:
+			}
+			select {
+			case <-queue:
+			default:
 			}
 		}
-		go func() {
-			for {
-				select {
-				case <-bg.Done():
-					return
-				case a := <-queue:
-					tg.Send(bg, a)
-				}
-			}
-		}()
 	}
+	go func() {
+		for {
+			select {
+			case <-bg.Done():
+				return
+			case a := <-queue:
+				tg.Send(bg, a)
+			}
+		}
+	}()
 	in, det, _ := pipeline(gdb, net, client, send)
 	// The tunnels behind the relays: a tunnel with no link speaks for
 	// its relay's paths.
@@ -257,7 +264,7 @@ func run() error {
 			spa = sub
 		}
 	}
-	app := web.New(gdb, a, cfg, a.Manifest().Version, spa, web.Parts{Ingest: in, Detect: det, Net: net, AI: brain, Countries: cfg.RegionCountries, Tunnels: tw, Cloud: nx})
+	app := web.New(gdb, a, cfg, a.Manifest().Version, spa, web.Parts{Ingest: in, Detect: det, Net: net, AI: brain, Countries: cfg.RegionCountries, Tunnels: tw, Cloud: nx, Settings: live, Alerts: tg})
 	srv := &http.Server{
 		Addr: cfg.Addr(), Handler: app.Handler(),
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute,

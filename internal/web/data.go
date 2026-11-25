@@ -29,6 +29,7 @@ func (s *Server) mountData(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/endpoints", s.signedIn(s.handleEndpoints))
 	s.mountAI(mux)
 	s.mountCloud(mux)
+	s.mountSettings(mux)
 }
 
 // endpointView is one endpoint's suspicion (detect.Suspicion) with whether
@@ -109,10 +110,13 @@ type statusView struct {
 	// the tunnels with no link now.
 	Tunnels     tunnels.Status `json:"tunnels"`
 	TunnelsDown []string       `json:"tunnelsDown"`
+	// HomeCountries are the client countries Insight keeps regions for:
+	// the operator's own markets, the rest of the world is abroad.
+	HomeCountries []string `json:"homeCountries"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, _ model.Admin) {
-	v := statusView{Version: s.version, Attribution: netinfo.Attribution, Outages: []uint32{}, TunnelsDown: []string{}}
+	v := statusView{Version: s.version, Attribution: netinfo.Attribution, Outages: []uint32{}, TunnelsDown: []string{}, HomeCountries: append([]string{}, s.countries...)}
 	if s.tunnels != nil {
 		v.Tunnels = s.tunnels.Status()
 		for _, t := range s.tunnels.Views() {

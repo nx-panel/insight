@@ -12,6 +12,7 @@ import Tag from 'primevue/tag'
 import Message from 'primevue/message'
 import { api, type NodeInfo, type Override, type Shape, type TunnelOnNode } from '../api'
 import { num, when } from '../format'
+import NetName from '../components/NetName.vue'
 
 const { t } = useI18n()
 const toast = useToast()
@@ -117,9 +118,7 @@ const overridden = (n: NodeInfo) =>
       </Column>
       <Column :header="t('nodes.network')">
         <template #body="{ data }">
-          <span v-if="data.effective.asn" class="ltr"
-            >AS{{ data.effective.asn }} {{ data.effective.org }}</span
-          >
+          <NetName v-if="data.effective.asn" :asn="data.effective.asn" :org="data.effective.org" />
           <span v-else class="muted">—</span>
         </template>
       </Column>

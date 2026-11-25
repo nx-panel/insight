@@ -5,7 +5,8 @@ import Tag from 'primevue/tag'
 import Button from 'primevue/button'
 import Message from 'primevue/message'
 import { api, type Alert, type NodeInfo } from '../api'
-import { asnLabel, num, when } from '../format'
+import { num, when } from '../format'
+import NetName from '../components/NetName.vue'
 
 const { t } = useI18n()
 const alerts = ref<Alert[]>([])
@@ -107,7 +108,7 @@ function reason(a: Alert) {
           <b>{{ nodeName(a.nodeId) }}</b> <span class="mono ltr">{{ a.inbound }}</span>
         </div>
         <div v-else>
-          <b>{{ asnLabel(a.asn, a.org) }}</b>
+          <b><NetName :asn="a.asn" :org="a.org" /></b>
           <template v-if="a.kind.startsWith('path.')">
             <span class="dir-arrow">→</span> {{ nodeName(a.nodeId) }}
             <span class="mono ltr">{{ a.inbound }}/{{ a.network }}</span>

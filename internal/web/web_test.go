@@ -18,11 +18,13 @@ import (
 
 	"github.com/nx-panel/insight/internal/admins"
 	"github.com/nx-panel/insight/internal/ai"
+	"github.com/nx-panel/insight/internal/alert"
 	"github.com/nx-panel/insight/internal/config"
 	"github.com/nx-panel/insight/internal/db"
 	"github.com/nx-panel/insight/internal/detect"
 	"github.com/nx-panel/insight/internal/model"
 	"github.com/nx-panel/insight/internal/netinfo"
+	"github.com/nx-panel/insight/internal/settings"
 	"github.com/nx-panel/insight/internal/tunnels"
 )
 
@@ -67,7 +69,14 @@ func newEnv(t *testing.T) *env {
 	net.SetASN(asns)
 	det := &detect.Detector{DB: gdb}
 	tw := &tunnels.Watcher{DB: gdb}
-	s := New(gdb, a, config.Config{}, "0.1.0", nil, Parts{Detect: det, Net: net, Tunnels: tw})
+	tg := &alert.Live{}
+	live := &settings.Live{DB: gdb, Install: settings.Values{Language: "en"}, Applied: func(v settings.Values) error {
+		return tg.Set(v.TelegramToken, v.TelegramChat, v.TelegramProxy, v.TelegramAPI, v.Language)
+	}}
+	if err := live.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	s := New(gdb, a, config.Config{}, "0.1.0", nil, Parts{Detect: det, Net: net, Tunnels: tw, Settings: live, Alerts: tg})
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	jar, _ := cookiejar.New(nil)
@@ -101,7 +110,7 @@ func (e *env) call(method, path string, body, out any) int {
 // session and answered with one.
 func TestTheAdminWebNeedsASignIn(t *testing.T) {
 	e := newEnv(t)
-	for _, p := range []string{"/api/status", "/api/matrix", "/api/nodes", "/api/alerts", "/api/suggestions", "/api/endpoints", "/api/ai", "/api/ai/reports"} {
+	for _, p := range []string{"/api/status", "/api/matrix", "/api/nodes", "/api/alerts", "/api/suggestions", "/api/endpoints", "/api/ai", "/api/ai/reports", "/api/settings"} {
 		if code := e.call("GET", p, nil, nil); code != http.StatusUnauthorized {
 			t.Errorf("signed out GET %s = %d", p, code)
 		}
@@ -112,7 +121,7 @@ func TestTheAdminWebNeedsASignIn(t *testing.T) {
 	if code := e.call("POST", "/api/login", map[string]string{"username": "admin", "password": "admin-secret-1"}, nil); code != http.StatusOK {
 		t.Fatalf("sign in = %d", code)
 	}
-	for _, p := range []string{"/api/status", "/api/matrix", "/api/nodes", "/api/alerts", "/api/suggestions", "/api/endpoints", "/api/ai", "/api/ai/reports"} {
+	for _, p := range []string{"/api/status", "/api/matrix", "/api/nodes", "/api/alerts", "/api/suggestions", "/api/endpoints", "/api/ai", "/api/ai/reports", "/api/settings"} {
 		if code := e.call("GET", p, nil, nil); code != http.StatusOK {
 			t.Errorf("signed in GET %s = %d", p, code)
 		}

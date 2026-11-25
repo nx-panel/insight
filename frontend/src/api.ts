@@ -89,6 +89,8 @@ export interface Status {
   probed: number
   tunnels: { state: 'waiting' | 'ok' | 'unsupported' | 'no-scope' | 'error'; error?: string }
   tunnelsDown: string[]
+  // The countries Insight keeps regions for: the operator's own markets.
+  homeCountries: string[]
 }
 
 export interface Cell {
@@ -345,6 +347,41 @@ export interface CloudState {
   report: { report: CloudReport | null; checkedAt: number; latest: number; error?: string }
 }
 
+// The settings page (internal/settings): a secret only as whether one is set.
+export interface Settings {
+  saved: boolean
+  telegramTokenSet: boolean
+  telegramChat: string
+  telegramProxy: string
+  telegramApi: string
+  language: 'en' | 'fa' | 'ru' | 'zh'
+  metricsTokenSet: boolean
+  metricsMin: number
+  install: {
+    port: string
+    basePath: string
+    publicUrl: string
+    https: string
+    database: string
+    adminUsername: string
+    regionCountries: string[]
+    asnUrl: string
+    cityUrl: string
+    trustedProxies: string
+  }
+}
+
+export interface SettingsInput {
+  telegramToken: string
+  clearTelegramToken: boolean
+  telegramChat: string
+  telegramProxy: string
+  telegramApi: string
+  language: string
+  metricsToken: string
+  clearMetricsToken: boolean
+}
+
 export const api = {
   login: (username: string, password: string) =>
     call<Me | { mfa: true; token: string }>('POST', '/login', { username, password }),
@@ -374,4 +411,8 @@ export const api = {
   setCloud: (on: boolean) => call<CloudState>('PUT', '/cloud', { on }),
   cloudBatch: (hour: number) => call<{ cells: CloudCell[] }>('GET', `/cloud/batches/${hour}`),
   cloudReport: () => call<CloudState>('POST', '/cloud/report'),
+  settings: () => call<Settings>('GET', '/settings'),
+  saveSettings: (s: SettingsInput) => call<Settings>('PUT', '/settings', s),
+  resetSettings: () => call<Settings>('DELETE', '/settings'),
+  testTelegram: () => call<{ sent: boolean }>('POST', '/settings/telegram/test'),
 }

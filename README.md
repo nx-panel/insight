@@ -46,7 +46,7 @@ a panel without a licence receives outages and throttling only. Insight
 asks for a newer report when it starts and when you open the page,
 sending the time of the report it holds.
 
-With a metrics token set at install, `/metrics` under the admin path feeds
+With a metrics token set at install or on the settings page, `/metrics` under the admin path feeds
 your own Prometheus, per node, inbound and client network (AS number and
 name), and the panel repository's `monitoring/` has the Grafana dashboard
 for it (`nx-insight.json`).

@@ -7,16 +7,16 @@ import Select from 'primevue/select'
 import Button from 'primevue/button'
 import Tag from 'primevue/tag'
 import { api, type Cell, type Matrix, type Status, type Suggestion } from '../api'
-import { asnLabel, health, num, pct, when } from '../format'
+import { countryName, health, num, pct, when } from '../format'
+import NetName from '../components/NetName.vue'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const status = ref<Status>()
 const matrix = ref<Matrix>()
 const suggestions = ref<Suggestion[]>([])
 const hours = ref(24)
 const by = ref<'asn' | 'region'>('asn')
 const network = ref<'all' | 'tcp' | 'udp'>('all')
-const showAll = ref(false)
 const error = ref('')
 const loading = ref(false)
 
@@ -65,7 +65,11 @@ onUnmounted(() => window.clearInterval(timer))
 const nodeName = (id: number) =>
   matrix.value?.nodes.find((n) => n.nodeId === id)?.name || t('matrix.node', { id })
 
-// Columns are node × inbound; rows are client networks (or regions).
+// Columns are node × inbound; rows are client networks (or regions). The
+// operator's own countries (the ones Insight keeps regions for) each get a
+// table, and every other country goes in one more, abroad: a province
+// table has nothing to say about a client in Germany, and a foreign
+// network beside the home ones is noise in the ranking.
 interface Column {
   key: string
   nodeId: number
@@ -73,45 +77,77 @@ interface Column {
 }
 interface Row {
   key: string
+  // By network: the network, shown by its short name; by region: the
+  // region's (or, abroad, the country's) name.
+  asn: number
+  org: string
   label: string
   sub: string
   total: number
   cells: Map<string, Cell>
+}
+interface Group {
+  key: string
+  title: string
+  abroad: boolean
+  columns: Column[]
+  rows: Row[]
 }
 
 const cells = computed(() =>
   (matrix.value?.cells ?? []).filter((c) => network.value === 'all' || c.network === network.value),
 )
 
-const columns = computed<Column[]>(() => {
+const home = computed(() => (status.value?.homeCountries ?? []).map((c) => c.toUpperCase()))
+const homeNames = computed(() =>
+  new Intl.ListFormat(locale.value, { type: 'conjunction' }).format(home.value.map(countryName)),
+)
+
+function columnsOf(list: Cell[]): Column[] {
   const seen = new Map<string, Column>()
-  for (const c of cells.value) {
+  for (const c of list) {
     const key = `${c.nodeId}/${c.inbound}`
     if (!seen.has(key)) seen.set(key, { key, nodeId: c.nodeId, inbound: c.inbound })
   }
   return [...seen.values()].toSorted(
     (a, b) => a.nodeId - b.nodeId || a.inbound.localeCompare(b.inbound),
   )
-})
+}
 
-const rows = computed<Row[]>(() => {
+function rowsOf(list: Cell[], abroad: boolean): Row[] {
   const out = new Map<string, Row>()
-  for (const c of cells.value) {
-    const key = by.value === 'region' ? `${c.country}/${c.region ?? ''}` : `${c.asn}`
-    let row = out.get(key)
-    if (!row) {
-      row =
-        by.value === 'region'
-          ? {
-              key,
-              label: c.region || t('matrix.noRegion'),
-              sub: c.country,
-              total: 0,
-              cells: new Map(),
-            }
-          : { key, label: asnLabel(c.asn, c.org), sub: c.country, total: 0, cells: new Map() }
-      out.set(key, row)
+  for (const c of list) {
+    const cc = (c.country || '').toUpperCase()
+    let key: string
+    let row: Row
+    if (by.value === 'region') {
+      key = abroad ? cc : `${cc}/${c.region ?? ''}`
+      row = {
+        key,
+        asn: 0,
+        org: '',
+        label: abroad
+          ? cc
+            ? countryName(cc)
+            : t('matrix.noCountry')
+          : c.region || t('matrix.noRegion'),
+        sub: '',
+        total: 0,
+        cells: new Map(),
+      }
+    } else {
+      key = `${c.asn}`
+      row = {
+        key,
+        asn: c.asn,
+        org: c.org,
+        label: '',
+        sub: abroad && cc ? countryName(cc) : '',
+        total: 0,
+        cells: new Map(),
+      }
     }
+    row = out.get(key) ?? (out.set(key, row), row)
     row.total += c.accepted
     const col = `${c.nodeId}/${c.inbound}`
     const have = row.cells.get(col)
@@ -131,9 +167,40 @@ const rows = computed<Row[]>(() => {
     }
   }
   return [...out.values()].toSorted((a, b) => b.total - a.total)
+}
+
+const groups = computed<Group[]>(() => {
+  const parts = new Map<string, Cell[]>()
+  for (const c of cells.value) {
+    const cc = (c.country || '').toUpperCase()
+    const k = home.value.includes(cc) ? cc : '*'
+    const list = parts.get(k) ?? (parts.set(k, []), parts.get(k)!)
+    list.push(c)
+  }
+  const order = [...home.value.filter((c) => parts.has(c)), ...(parts.has('*') ? ['*'] : [])]
+  const only = order.length === 1 && !home.value.length
+  return order.map((k) => {
+    const list = parts.get(k)!
+    const abroad = k === '*'
+    return {
+      key: k,
+      title: only
+        ? t('matrix.allClients')
+        : abroad
+          ? t('matrix.abroad')
+          : t('matrix.clientsIn', { c: countryName(k) }),
+      abroad,
+      columns: columnsOf(list),
+      rows: rowsOf(list, abroad),
+    }
+  })
 })
 
-const shownRows = computed(() => (showAll.value ? rows.value : rows.value.slice(0, 40)))
+const expanded = ref(new Set<string>())
+const shownRows = (g: Group) => (expanded.value.has(g.key) ? g.rows : g.rows.slice(0, 40))
+function expand(g: Group) {
+  expanded.value = new Set([...expanded.value, g.key])
+}
 
 function cellTitle(c: Cell) {
   if (c.kind === 'endpoint')
@@ -207,7 +274,7 @@ const feedSeverity = computed(() => {
       <ul class="suggestions">
         <li v-for="s in suggestions" :key="`${s.asn}/${s.nodeId}/${s.inbound}/${s.network}`">
           <Tag severity="danger" :value="t('overview.blocked')" />
-          <b>{{ asnLabel(s.asn, s.org) }}</b> <span class="dir-arrow">→</span>
+          <b><NetName :asn="s.asn" :org="s.org" /></b> <span class="dir-arrow">→</span>
           {{ nodeName(s.nodeId) }}
           <span class="mono ltr">{{ s.inbound }}/{{ s.network }}</span>
           <span v-if="s.alternatives.length">
@@ -256,28 +323,47 @@ const feedSeverity = computed(() => {
         />
       </div>
       <p class="muted">{{ t('matrix.hint') }}</p>
-      <p v-if="!rows.length" class="muted">{{ t('matrix.empty') }}</p>
-      <div v-else class="scroll">
+      <p v-if="!groups.length" class="muted">{{ t('matrix.empty') }}</p>
+    </section>
+
+    <section v-for="g in groups" :key="g.key" class="card stack">
+      <h2>
+        {{ g.title }}
+        <span class="muted small">· {{ t('matrix.rows', { n: num(g.rows.length) }) }}</span>
+      </h2>
+      <p v-if="g.abroad && home.length" class="muted small">
+        {{ t('matrix.abroadHint', { c: homeNames }) }}
+      </p>
+      <div class="scroll">
         <table class="matrix">
           <thead>
             <tr>
               <th class="sticky">
-                {{ by === 'region' ? t('matrix.region') : t('matrix.clientNetwork') }}
+                {{
+                  by === 'region'
+                    ? g.abroad
+                      ? t('matrix.country')
+                      : t('matrix.region')
+                    : t('matrix.clientNetwork')
+                }}
               </th>
-              <th v-for="c in columns" :key="c.key">
+              <th v-for="c in g.columns" :key="c.key">
                 <div>{{ nodeName(c.nodeId) }}</div>
                 <div class="mono ltr muted small">{{ c.inbound }}</div>
               </th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="r in shownRows" :key="r.key">
+            <tr v-for="r in shownRows(g)" :key="r.key">
               <th class="sticky rowhead">
-                <div>{{ r.label }}</div>
-                <div class="muted small">{{ r.sub }} · {{ num(r.total) }}</div>
+                <div v-if="by === 'asn'"><NetName :asn="r.asn" :org="r.org" /></div>
+                <div v-else>{{ r.label }}</div>
+                <div class="muted small">
+                  <template v-if="r.sub">{{ r.sub }} · </template>{{ num(r.total) }}
+                </div>
               </th>
               <td
-                v-for="c in columns"
+                v-for="c in g.columns"
                 :key="c.key"
                 :class="
                   r.cells.get(c.key)
@@ -302,7 +388,7 @@ const feedSeverity = computed(() => {
                   <template v-else>
                     {{ pct(r.cells.get(c.key)!.authed, r.cells.get(c.key)!.accepted) }}
                   </template>
-                  <div v-if="r.cells.get(c.key)!.rttMs" class="small muted">
+                  <div v-if="r.cells.get(c.key)!.rttMs" class="small muted" dir="ltr">
                     {{ num(r.cells.get(c.key)!.rttMs) }} ms
                   </div>
                 </template>
@@ -312,10 +398,10 @@ const feedSeverity = computed(() => {
         </table>
       </div>
       <Button
-        v-if="rows.length > 40 && !showAll"
-        :label="t('matrix.showAll', { n: rows.length })"
+        v-if="g.rows.length > 40 && !expanded.has(g.key)"
+        :label="t('matrix.showAll', { n: g.rows.length })"
         text
-        @click="showAll = true"
+        @click="expand(g)"
       />
     </section>
   </div>

@@ -69,3 +69,15 @@ body {
   display: inline-block;
   transform: scaleX(-1);
 }
+
+/* PrimeVue's tab underline is placed from a measured offsetLeft, a physical
+   offset, but its CSS reads it as inset-inline-start, which in RTL counts
+   from the right: the bar lands away from the active tab. Anchor it to the
+   physical left the measurement describes. */
+[dir='rtl'] .p-tablist-active-bar {
+  inset-inline-start: auto;
+  left: var(--px-active-bar-left);
+  transition:
+    width 250ms cubic-bezier(0.35, 0, 0.25, 1),
+    left 250ms cubic-bezier(0.35, 0, 0.25, 1);
+}

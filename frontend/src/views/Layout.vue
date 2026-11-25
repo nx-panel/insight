@@ -24,7 +24,7 @@ const nav = computed(() => [
   { to: { name: 'analysis' }, icon: 'pi pi-sparkles', label: t('nav.analysis') },
   { to: { name: 'alerts' }, icon: 'pi pi-bell', label: t('nav.alerts') },
   { to: { name: 'cloud' }, icon: 'pi pi-globe', label: t('nav.cloud') },
-  { to: { name: 'security' }, icon: 'pi pi-shield', label: t('nav.security') },
+  { to: { name: 'settings' }, icon: 'pi pi-cog', label: t('nav.settings') },
 ])
 
 async function signOut() {
@@ -85,7 +85,7 @@ function pick(l: Locale) {
       </header>
       <main class="content">
         <Message
-          v-if="route.name !== 'security'"
+          v-if="route.name !== 'settings'"
           class="caution"
           severity="warn"
           :closable="false"

@@ -51,11 +51,13 @@ type Sources struct {
 	Now func() time.Time
 }
 
-// Handler is GET /metrics. An empty token turns the route off: it answers
+// Handler is GET /metrics, its token read on every request since the
+// settings page may change it. An empty token turns the route off: it answers
 // 404, as a route that is not there.
-func Handler(token string, src Sources) http.HandlerFunc {
-	want := []byte("Bearer " + token)
+func Handler(tokenOf func() string, src Sources) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		token := tokenOf()
+		want := []byte("Bearer " + token)
 		if token == "" {
 			http.NotFound(w, r)
 			return
