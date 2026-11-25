@@ -118,7 +118,7 @@ var hour = time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC).Unix()
 // are stamped in, so none reads as a node with a wrong clock.
 func atHour() time.Time { return time.Unix(hour+3500, 0) }
 
-// TestASampleBecomesAnHourlyRowWithoutItsPrefix is PT4's done_when: a
+// TestASampleBecomesAnHourlyRowWithoutItsPrefix: a
 // polled sample is an hourly row with the client's ASN and region, the
 // prefix nowhere in the database, and the cursor kept with it so the next
 // poll asks only for what is new.
@@ -268,7 +268,7 @@ func TestPollStates(t *testing.T) {
 	}
 }
 
-// TestNodeNetinfoAndOverrides is PT4's second done_when: a node's host
+// TestNodeNetinfoAndOverrides: a node's host
 // ASN and city are filled from its address, and an override stays over a
 // later refresh.
 func TestNodeNetinfoAndOverrides(t *testing.T) {
@@ -541,7 +541,7 @@ func TestCountingIsTheNodesListedOn(t *testing.T) {
 	}
 }
 
-// TestTunnelLinksAndShapesAreRead is PT16's ingest half: the tunnel links
+// TestTunnelLinksAndShapesAreRead: the tunnel links
 // the panel relays become hourly tunnel rows, added up across polls, and
 // the shapes it lists are what Shapes answers.
 func TestTunnelLinksAndShapesAreRead(t *testing.T) {
@@ -618,9 +618,9 @@ func TestTunnelLinksAndShapesAreRead(t *testing.T) {
 }
 
 // TestFailureSignaturesAreKeptPerCell: the panel relays each failure's
-// signature (PT12); Insight keeps them by cell and hour in path_sig_hours,
+// signature; Insight keeps them by cell and hour in path_sig_hours,
 // adds across flushes, refuses keys no node sends, and drops them with the
-// hours (nx-panel docs/path-telemetry.md PT19).
+// hours.
 func TestFailureSignaturesAreKeptPerCell(t *testing.T) {
 	gdb := openDB(t)
 	fp := &fakePanel{}

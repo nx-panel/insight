@@ -45,7 +45,7 @@ func TestMetricsNeedTheirToken(t *testing.T) {
 	}
 }
 
-// TestMetricsAreBounded is PT17's: forty client networks on one inbound
+// TestMetricsAreBounded: forty client networks on one inbound
 // make MaxASNs series of their own and one "other", never a prefix or an
 // address; the detector's paths, the names and the alert counts are there,
 // and every line parses as the exposition format.

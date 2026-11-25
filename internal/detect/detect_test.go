@@ -67,7 +67,7 @@ func kinds(t *testing.T, gdb *gorm.DB) []string {
 	return out
 }
 
-// TestABlockedPathAlertsAndRecovers is PT5's done_when on the detector: a
+// TestABlockedPathAlertsAndRecovers: a
 // path whose handshakes start failing is degraded on the second bad
 // evaluation (ten minutes), not the first, and recovered on the second good
 // one after it clears; one bad window alone moves nothing.
@@ -135,7 +135,7 @@ func TestTrafficThatStopsIsADrop(t *testing.T) {
 	}
 }
 
-// TestAWholeASNDownIsOneOutage is P20 a: every path of a client ASN down on
+// TestAWholeASNDownIsOneOutage: every path of a client ASN down on
 // two nodes is one asn.outage, with no per-path alert, and its end is one
 // asn.recovered.
 func TestAWholeASNDownIsOneOutage(t *testing.T) {
@@ -595,7 +595,7 @@ func TestAShortRestartBlindsNothing(t *testing.T) {
 	}
 }
 
-// TestABrokenTunnelSpeaksForItsRelay is PT16's done_when on the detector:
+// TestABrokenTunnelSpeaksForItsRelay:
 // with a relay's tunnel down, every network failing on that relay raises no
 // path.degraded and no asn.outage — the tunnel's own alert says it — while
 // the paths still read degraded for the hints; a path still down once the

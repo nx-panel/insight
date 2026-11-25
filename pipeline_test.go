@@ -51,8 +51,8 @@ func (p *panelStub) Put(_ context.Context, _ string, body, _ any) error {
 	return nil
 }
 
-// TestABlockedPathEndToEnd is PT5's done_when through the whole addon: two
-// client networks (P19 a: MCI and TCI as two fixture ASNs) reach two nodes;
+// TestABlockedPathEndToEnd runs a block through the whole addon: two
+// client networks (MCI and TCI as two fixture ASNs) reach two nodes;
 // after a learning day MCI's handshakes to node 1 start failing — the path
 // alerts within the window (two five-minute evaluations), MCI's hint puts
 // node 2 first; when it clears, the path recovers and node 1 is back.

@@ -55,7 +55,7 @@ Client addresses never leave your server: the nodes report a /24 or /48
 prefix (/40 for a 6to4 address), Insight turns it into its network the moment it reads it and keeps
 nothing else.
 
-Status: in development (nx-panel `docs/path-telemetry.md`, phases 1 and 2). Needs a
+Status: in development. Needs a
 panel and nodes with path telemetry (panel 0.2.0 or later).
 
 ## Data

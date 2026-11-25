@@ -81,7 +81,7 @@ func alerts(t *testing.T, gdb *gorm.DB) []detect.Alert {
 	return out
 }
 
-// TestATunnelWithNoLinkIsDownAfterTwoPolls is PT16's watcher: a tunnel goes
+// TestATunnelWithNoLinkIsDownAfterTwoPolls: a tunnel goes
 // down after two polls with no link and comes back after two with one,
 // each change one alert naming the tunnel and its relay; a relay the panel
 // cannot reach says nothing; a disabled tunnel is never asked; a restart

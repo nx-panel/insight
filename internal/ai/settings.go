@@ -1,4 +1,4 @@
-// Package ai is Mode A of nx-panel docs/path-telemetry.md §4.4 and §4.8: the
+// Package ai is Mode A: the
 // admin's own model — any OpenAI-compatible API with their key, or a local
 // Ollama at no cost — reads a compact table of this panel's paths once a day
 // per client country, and again when the detector raises an alert there, and

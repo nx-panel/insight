@@ -71,7 +71,7 @@ type Parts struct {
 	// AI is Mode A's runner, Countries the client countries it reads.
 	AI        *ai.Runner
 	Countries []string
-	// Tunnels is the tunnel watcher (P26), nil for none.
+	// Tunnels is the tunnel watcher, nil for none.
 	Tunnels *tunnels.Watcher
 	// Cloud is Mode B (internal/cloud), nil for none.
 	Cloud *cloud.Cloud
@@ -114,7 +114,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/me/2fa/totp/confirm", s.signedIn(s.handleTOTPConfirm))
 	mux.HandleFunc("DELETE /api/me/2fa", s.signedIn(s.handleTOTPDisable))
 	s.mountData(mux)
-	// Prometheus (P28): its own bearer token, no session.
+	// Prometheus: its own bearer token, no session.
 	src := metrics.Sources{DB: s.db, Detect: s.detect, Ingest: s.ingest, Tunnels: s.tunnels}
 	if s.net != nil {
 		src.Org = s.net.Org

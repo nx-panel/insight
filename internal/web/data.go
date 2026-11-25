@@ -106,7 +106,7 @@ type statusView struct {
 	// Probed is how many endpoints are in a probed episode now.
 	Probed int64 `json:"probed"`
 	// Tunnels is the tunnel watcher's state and TunnelsDown the names of
-	// the tunnels with no link now (P26).
+	// the tunnels with no link now.
 	Tunnels     tunnels.Status `json:"tunnels"`
 	TunnelsDown []string       `json:"tunnelsDown"`
 }
@@ -553,8 +553,8 @@ const (
 )
 
 // handleSuggestions is GET /api/suggestions: for every degraded path not
-// inside an ASN outage (P20: nothing to rotate there) nor on the relay of a
-// tunnel that is down (P26: the tunnel is the cause), the paths that work
+// inside an ASN outage (nothing to rotate there) nor on the relay of a
+// tunnel that is down (the tunnel is the cause), the paths that work
 // for that client network instead. The subscription hints already put them
 // first; this is what the admin can do about the rest — move the users,
 // change the node's address or the inbound's port or SNI.

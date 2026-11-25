@@ -16,7 +16,7 @@ import (
 	"github.com/nx-panel/insight/internal/tunnels"
 )
 
-// When passes run (§4.8: event-driven beyond the daily pass).
+// When passes run (event-driven beyond the daily pass).
 const (
 	// DailyEvery is the regular pass per client country.
 	DailyEvery = 24 * time.Hour

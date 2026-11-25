@@ -24,7 +24,7 @@ const (
 	DriverPostgres = "postgres"
 )
 
-// The network-information sources (nx-panel docs/path-telemetry.md P5, P17):
+// The network-information sources:
 // each install downloads them itself, from where their publishers put them.
 // NX_OPT_ASN_URL and NX_OPT_CITY_URL name a mirror on an install whose
 // environment the operator edits by hand; they are not questions of the
@@ -84,7 +84,7 @@ type Config struct {
 	TelegramAPI   string
 	// Language is what the alerts are written in: en, fa, ru or zh.
 	Language string
-	// MetricsToken is the bearer token GET /metrics asks for (P28); empty
+	// MetricsToken is the bearer token GET /metrics asks for; empty
 	// turns the route off.
 	MetricsToken string
 	// CloudURL is NX's cloud for Mode B; "" is internal/cloud.DefaultURL.

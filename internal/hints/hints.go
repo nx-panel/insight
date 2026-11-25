@@ -1,13 +1,13 @@
 // Package hints computes the subscription ordering document and hands it to
-// the panel (PUT /api/v1/subscriptions/order-hints, telemetry:write;
-// nx-panel docs/path-telemetry.md §4.3, P6): for each client ASN Insight has
+// the panel (PUT /api/v1/subscriptions/order-hints, telemetry:write):
+// for each client ASN Insight has
 // enough data on, its nodes in order of how well they work for that ASN,
 // and within a node its inbounds the same way. Links are only moved, never
 // hidden — the panel enforces that.
 //
 // The CIDRs a group names are the ASN's announced ranges from the network
 // information (public routing data). During an asn.outage the ASN's group is
-// left as it was (P20 a): ranking paths that are all down by their last
+// left as it was: ranking paths that are all down by their last
 // minutes says nothing about which will come back first.
 package hints
 

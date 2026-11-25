@@ -109,8 +109,8 @@ func fleet(t *testing.T, gdb *gorm.DB) Sources {
 	}
 }
 
-// TestABatchIsTheGlobalKeyAndNothingOfTheOperator is P32 (b) and phase 2's
-// exit criterion 1 on Insight's side: cells by §4.7's key with a verdict,
+// TestABatchIsTheGlobalKeyAndNothingOfTheOperator: cells by the global
+// key with a verdict,
 // and no node's address, name or id, no inbound tag, no SNI.
 func TestABatchIsTheGlobalKeyAndNothingOfTheOperator(t *testing.T) {
 	gdb := openDB(t)

@@ -1,6 +1,5 @@
-// Package detect decides when a path is degraded and when it recovered
-// (nx-panel docs/path-telemetry.md §4.4, PT5). A path is one node, inbound,
-// client ASN and network. Its normal is learned per hour of the week — 168
+// Package detect decides when a path is degraded and when it recovered.
+// A path is one node, inbound, client ASN and network. Its normal is learned per hour of the week — 168
 // slots of an exponentially weighted mean and variance — with a fallback to
 // the path's recent hours while a slot has seen too few weeks; the last
 // fifteen minutes are compared with it every evaluation, and a state moves
@@ -8,8 +7,8 @@
 //
 // When every path of one client ASN with a normal is degraded on two or
 // more nodes at once, it is not those paths that are blocked but the ASN
-// that is cut off — an Iranian mobile shutdown, a Russian whitelist mode
-// (P20 a): one asn.outage alert, no per-path alerts for it, and the
+// that is cut off — an Iranian mobile shutdown, a Russian whitelist mode:
+// one asn.outage alert, no per-path alerts for it, and the
 // subscription hints for it are left as they were.
 package detect
 
@@ -29,7 +28,7 @@ import (
 	"github.com/nx-panel/insight/internal/model"
 )
 
-// Tunables, constants first (decision 7 spirit).
+// Tunables, constants first.
 const (
 	// BucketEvery and Buckets make the window compared with the normal.
 	BucketEvery = 5 * time.Minute
@@ -183,7 +182,7 @@ type Detector struct {
 	Send func(context.Context, Alert)
 	Now  func() time.Time
 	// TunnelDown, when set, is the nodes a broken tunnel explains: the
-	// relays of tunnels with no link (internal/tunnels, P26). Their paths
+	// relays of tunnels with no link (internal/tunnels). Their paths
 	// are judged as ever — the hints still move their users to what
 	// works — but a path that goes down on one says nothing (the tunnel's
 	// own alert does) and is left out of its ASN's outage count, like a

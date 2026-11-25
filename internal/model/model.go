@@ -1,7 +1,6 @@
-// Package model is Insight's own database (decision 28 in the panel's
-// docs/product.md: an addon keeps its own). Nothing here holds a client
+// Package model is Insight's own database (an addon keeps its own). Nothing here holds a client
 // address or prefix: a prefix exists only in memory between a poll and its
-// ASN lookup (nx-panel docs/path-telemetry.md §4.4, exit criterion 1).
+// ASN lookup.
 package model
 
 import (
@@ -30,7 +29,7 @@ type PathCounters struct {
 	// any ratio over Accepted.
 	FailedQUIC uint64 `json:"failedQuic" gorm:"column:failed_quic"`
 
-	// Probe signals (nx-panel docs/path-telemetry.md §4.5): handshakes the
+	// Probe signals: handshakes the
 	// node saw before, and failures soon after another network's success.
 	Replayed     uint64 `json:"replayed"`
 	FollowUpFail uint64 `json:"followUpFail"`
@@ -49,9 +48,8 @@ type PathCounters struct {
 	Up   int64 `json:"up"`
 	Down int64 `json:"down"`
 
-	// Sigs counts the failures by signature, "<class>/<bytes>/<seconds>"
-	// (nx-panel docs/path-telemetry.md PT12), on their way to
-	// path_sig_hours; never a column of the cell.
+	// Sigs counts the failures by signature, "<class>/<bytes>/<seconds>",
+	// on their way to path_sig_hours; never a column of the cell.
 	Sigs map[string]uint64 `json:"-" gorm:"-"`
 }
 
@@ -83,7 +81,7 @@ func (PathHour) TableName() string { return "path_hours" }
 
 // PathSigHour is one failure signature of one cell over one hour, kept
 // PathHourDays days like the hours: the signatures exist for Mode B's
-// batches (nx-panel docs/path-telemetry.md P23, PT19), which only send the
+// batches, which only send the
 // hour just closed, so they are not folded into days.
 type PathSigHour struct {
 	ID   uint  `json:"id" gorm:"primaryKey"`
@@ -121,8 +119,7 @@ type PathDay struct {
 
 func (PathDay) TableName() string { return "path_days" }
 
-// TunnelCell names one tunnel link's hour on one node (nx-panel
-// docs/path-telemetry.md P26): the tunnel's tag, the peer node's name, the
+// TunnelCell names one tunnel link's hour on one node: the tunnel's tag, the peer node's name, the
 // address dialled (empty on the accepting side) and the side. A peer is
 // one of the operator's own nodes, never a client.
 type TunnelCell struct {

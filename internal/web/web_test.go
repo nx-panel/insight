@@ -165,7 +165,7 @@ func TestTheMatrixAndTheNodes(t *testing.T) {
 	}
 }
 
-// TestTheNodesShowTheirTunnels is PT16 on the Nodes page: each node lists
+// TestTheNodesShowTheirTunnels: each node lists
 // the tunnels it is the relay or an origin of, with the watcher's state and
 // its links' last 24 hours, and the status names a tunnel that is down.
 func TestTheNodesShowTheirTunnels(t *testing.T) {

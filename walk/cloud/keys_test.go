@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// TestPrintKeys prints the walk installs' public keys for run.sh.
+// TestPrintKeys prints the walk installs' public keys for the harness.
 func TestPrintKeys(t *testing.T) {
 	for i := range 5 {
 		fmt.Println(base64.StdEncoding.EncodeToString(ed25519.NewKeyFromSeed(Seed(i)).Public().(ed25519.PublicKey)))

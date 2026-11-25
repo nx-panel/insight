@@ -1,5 +1,4 @@
-// Package metrics serves Insight's numbers to Prometheus (nx-panel
-// docs/path-telemetry.md P28 a, PT17): GET /metrics behind a bearer token,
+// Package metrics serves Insight's numbers to Prometheus: GET /metrics behind a bearer token,
 // in the text exposition format written by hand, as the panel's is — no
 // client library for a few dozen lines.
 //

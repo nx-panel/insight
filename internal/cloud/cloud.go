@@ -1,5 +1,4 @@
-// Package cloud is NX Insight's Mode B (nx-panel docs/path-telemetry.md
-// §4.4, §5.3, PT19): with the admin's consent, the hour just closed goes to
+// Package cloud is NX Insight's Mode B: with the admin's consent, the hour just closed goes to
 // NX's cloud as anonymous cells (batch.go), signed with this install's
 // contributor key, and the regional report NX publishes comes back.
 //
@@ -46,7 +45,7 @@ const (
 	ProofContext         = "nx-contributor-key-v1:"
 )
 
-// FeedKey is the public half of NX's feed key (P41 a): every report is
+// FeedKey is the public half of NX's feed key: every report is
 // signed with it, and one that does not verify is not shown.
 const FeedKey = "w/Qx7QJ285cVegS9m18SNo1jx8i3RGY2EKaoL46nXEk="
 

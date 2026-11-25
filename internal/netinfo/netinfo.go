@@ -1,8 +1,8 @@
 // Package netinfo answers what network an address is on: its autonomous
 // system (iptoasn.com's ranges) and, for clients in the countries the
-// install keeps regions for, its province and city (DB-IP City Lite) —
-// nx-panel docs/path-telemetry.md P5. Each install downloads both itself
-// (P17 a) and keeps them in its data directory; nothing is sent anywhere.
+// install keeps regions for, its province and city (DB-IP City Lite).
+// Each install downloads both itself
+// and keeps them in its data directory; nothing is sent anywhere.
 //
 // Attribution: DB-IP's data is CC BY 4.0 and must be credited where its
 // results are shown (Attribution); iptoasn.com states no licence on its

@@ -1,6 +1,5 @@
 // Command insight is NX Insight, the official open addon that shows which
-// paths from the operator's users to their nodes still work (nx-panel
-// docs/path-telemetry.md): it polls the panel's path telemetry, turns each
+// paths from the operator's users to their nodes still work: it polls the panel's path telemetry, turns each
 // client prefix into its network and forgets the prefix, keeps hourly and
 // daily cells in its own database, and knows each node's host network.
 //
@@ -194,7 +193,7 @@ func run() error {
 		}()
 	}
 	in, det, _ := pipeline(gdb, net, client, send)
-	// The tunnels behind the relays (P26): a tunnel with no link speaks for
+	// The tunnels behind the relays: a tunnel with no link speaks for
 	// its relay's paths.
 	tw := &tunnels.Watcher{DB: gdb, Send: send, Panel: func() tunnels.Getter {
 		if c := client(); c != nil {

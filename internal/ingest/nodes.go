@@ -18,7 +18,7 @@ import (
 
 // Nodes keeps node_netinfo: each node's host network, read from the
 // panel's node list (nodes:read) and the network information, with the
-// admin's overrides left where they are (§4.3: node identity is the addon's
+// admin's overrides left where they are (node identity is the addon's
 // job).
 type Nodes struct {
 	DB    *gorm.DB

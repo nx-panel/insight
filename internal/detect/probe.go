@@ -11,12 +11,11 @@ import (
 	"github.com/nx-panel/insight/internal/model"
 )
 
-// Active probing (nx-panel docs/path-telemetry.md §4.5, PT9). The node
-// counts the signals and acts on none (P8 a); here they become a suspicion
+// Active probing. The node counts the signals and acts on none; here they become a suspicion
 // score per endpoint, an endpoint.probed alert, and a suggestion to rotate
 // the endpoint before the probing turns into a block. An endpoint is one
 // node and inbound: on a node an inbound is one port and one SNI set, the
-// "address × port × SNI class" of §4.5 as the telemetry sees it.
+// "address × port × SNI class" as the telemetry sees it.
 //
 // The score is not calibrated yet. Each probed alert is kept with its time,
 // so whether a path alert on the same endpoint followed within
@@ -28,7 +27,7 @@ const (
 	ScoreWindow = 6 * time.Hour
 	// replayPoints is each replayed handshake's weight, replayCap the most
 	// replays may give: a replay is the strongest evidence of a prober
-	// (§4.5) — a real client never sends one handshake twice.
+	// — a real client never sends one handshake twice.
 	replayPoints = 20
 	replayCap    = 80
 	// followPoints is what a surge of follow-up failures adds: at least

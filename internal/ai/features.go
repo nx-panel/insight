@@ -49,7 +49,7 @@ type Path struct {
 	Endpoint bool
 }
 
-// TunnelRow is one node-to-node tunnel (P26): the relay users connect to,
+// TunnelRow is one node-to-node tunnel: the relay users connect to,
 // the origins it carries them to, and whether it has no link now.
 type TunnelRow struct {
 	Name    string

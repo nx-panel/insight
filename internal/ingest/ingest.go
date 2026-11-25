@@ -1,7 +1,7 @@
 // Package ingest pulls the panel's path telemetry (GET
 // /api/v1/telemetry/paths), turns each sample's client prefix into its ASN
 // and region and forgets the prefix, and adds the counters into hourly cells
-// in Insight's database (nx-panel docs/path-telemetry.md §4.4, §4.6).
+// in Insight's database.
 //
 // Polled samples accumulate in memory and are written every FlushEvery, one
 // transaction a flush, with the poll cursor in the same transaction: a
@@ -37,7 +37,7 @@ const (
 	// FlushEvery is how often the accumulated cells are written.
 	FlushEvery = 5 * time.Minute
 	// TopK is how many client ASNs get their own cell per node and inbound
-	// in an hour; the rest fold into ASN 0 (§4.6).
+	// in an hour; the rest fold into ASN 0.
 	TopK = 30
 	// pageLimit is the samples asked for per request.
 	pageLimit = 20000
@@ -77,7 +77,7 @@ type Sample struct {
 	Accepted   uint32            `json:"accepted"`
 	Failed     map[string]uint32 `json:"failed"`
 	// FailedSig counts the failures by signature,
-	// "<class>/<bytes>/<seconds>" (nx-panel docs/path-telemetry.md PT12).
+	// "<class>/<bytes>/<seconds>".
 	FailedSig    map[string]uint32 `json:"failed_sig"`
 	Authed       uint32            `json:"authed"`
 	EarlyClose   uint32            `json:"early_close"`
@@ -91,7 +91,7 @@ type Sample struct {
 }
 
 // NodeState is one node's telemetry state as the panel reports it, with
-// the shape of what it serves (nx-panel docs/path-telemetry.md P22): an
+// the shape of what it serves: an
 // older panel sends no inbounds.
 type NodeState struct {
 	ID       uint    `json:"id"`
@@ -114,11 +114,11 @@ type Shape struct {
 // KindEndpoint is a Shape of a WireGuard, OpenVPN or OpenConnect endpoint.
 // A WireGuard server answers a handshake it cannot authenticate with
 // silence, so its cells count only what got through — handshakes and
-// bytes — never accepted or failed (P27).
+// bytes — never accepted or failed.
 const KindEndpoint = "endpoint"
 
 // TunnelSample is one node's counts for one node-to-node tunnel link since
-// its previous drain (P26), as polled.
+// its previous drain, as polled.
 type TunnelSample struct {
 	Cursor      uint64            `json:"cursor"`
 	NodeID      uint              `json:"node_id"`

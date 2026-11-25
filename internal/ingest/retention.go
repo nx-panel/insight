@@ -9,7 +9,7 @@ import (
 	"github.com/nx-panel/insight/internal/model"
 )
 
-// Retention windows (§4.6), constants first.
+// Retention windows, constants first.
 const (
 	PathHourDays = 7
 	PathDayDays  = 90

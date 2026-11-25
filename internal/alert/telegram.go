@@ -1,6 +1,6 @@
 // Package alert delivers the detector's alerts to the admin's Telegram (or
 // Bale) chat through addon-kit's bot client. Every alert is stored whether
-// or not a chat is set; the admin web lists them (PT6).
+// or not a chat is set; the admin web lists them.
 package alert
 
 import (

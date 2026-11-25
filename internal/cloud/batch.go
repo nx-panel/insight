@@ -17,8 +17,8 @@ import (
 	"github.com/nx-panel/insight/internal/tunnels"
 )
 
-// Batch is one closed hour as Mode B sends it: §4.7's global key, Insight's
-// own verdict (P32 b), the counters. Nothing names a node, an inbound, an
+// Batch is one closed hour as Mode B sends it: the global key, Insight's
+// own verdict, the counters. Nothing names a node, an inbound, an
 // address, a domain or the panel.
 type Batch struct {
 	V       int    `json:"v"`
@@ -56,7 +56,7 @@ type Cell struct {
 	DurN         uint64            `json:"dur_n"`
 }
 
-// The verdicts (P32 b), the cloud's list.
+// The verdicts, the cloud's list.
 const (
 	VerdictOK         = "ok"
 	VerdictDegraded   = "degraded"

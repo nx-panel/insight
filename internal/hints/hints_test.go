@@ -42,7 +42,7 @@ func seed(t *testing.T, gdb *gorm.DB, hour int64, node uint, inbound string, asn
 	}
 }
 
-// TestHintsFollowThePaths is PT5's done_when on the hints: for an ASN seen
+// TestHintsFollowThePaths: for an ASN seen
 // on two nodes, the node that works for it comes first and its working
 // inbound first within it; a degraded path drops to the back; during the
 // ASN's outage its group is left as it was; an unchanged document is not

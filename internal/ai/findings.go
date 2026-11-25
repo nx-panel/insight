@@ -232,7 +232,7 @@ const (
 // supported reports whether the table's own numbers bear a finding out. A
 // model — a small local one above all — can name real paths and still be
 // wrong about them; what the numbers contradict is dropped, so the admin
-// sees only readings the data supports (§4.8: a wrong proposal must be
+// sees only readings the data supports (a wrong proposal must be
 // cheap).
 func supported(f Finding, t Table) bool {
 	out := map[uint32]bool{}
@@ -245,8 +245,8 @@ func supported(f Finding, t Table) bool {
 	down := func(p Path) bool { return p.Degraded || (p.Success >= 0 && p.Success < blockedBelow) }
 	// Blocked is down while its network is up and its node's tunnel works:
 	// in an outage nothing of the operator's is blocked and nothing is
-	// worth rotating (P20), and a relay whose tunnel is cut is not blocked
-	// either (P26). Users on it are still better moved.
+	// worth rotating, and a relay whose tunnel is cut is not blocked
+	// either. Users on it are still better moved.
 	blocked := func(p Path) bool { return down(p) && !out[p.ASN] && !cut[p.Node] }
 	unreachable := func(p Path) bool { return down(p) && !out[p.ASN] }
 	works := func(p Path) bool { return !p.Degraded && (p.Success < 0 || p.Success >= worksFrom) }

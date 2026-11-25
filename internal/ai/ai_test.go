@@ -395,7 +395,7 @@ func TestAProviderWithoutMaxTokensIsAskedAgain(t *testing.T) {
 
 // TestNothingIsRotatedForANetworkThatIsCutOff: with a network in an outage
 // its dead paths are no block of the operator's — no node_blocked,
-// inbound_blocked, rotate or move for it is kept (P20); and node_blocked
+// inbound_blocked, rotate or move for it is kept; and node_blocked
 // needs another node that works for the network.
 func TestNothingIsRotatedForANetworkThatIsCutOff(t *testing.T) {
 	tbl := ai.Table{
@@ -437,7 +437,7 @@ func TestNothingIsRotatedForANetworkThatIsCutOff(t *testing.T) {
 }
 
 // TestNothingIsRotatedOnARelayWhoseTunnelIsCut: with a relay's tunnel
-// down, its dead paths are the tunnel (P26) — tunnel_down is kept, a block
+// down, its dead paths are the tunnel — tunnel_down is kept, a block
 // or rotation for that node is dropped, moving its users to a working node
 // is kept; and a WireGuard endpoint's row, whose success is unknown, is
 // down only by its state.

@@ -1,5 +1,4 @@
-// Package tunnels watches the operator's node-to-node tunnels (nx-panel
-// docs/path-telemetry.md P26, PT16). A user's path ends at the relay node,
+// Package tunnels watches the operator's node-to-node tunnels. A user's path ends at the relay node,
 // where they connect; behind it a tunnel carries their traffic to an origin
 // node. A censor that cuts that link shows on the relay as every client
 // network failing at once — read as the relay's inbounds blocked, with a

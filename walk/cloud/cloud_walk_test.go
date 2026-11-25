@@ -1,12 +1,11 @@
 //go:build cloudwalk
 
-// The Mode B walk against the real cloud Worker and the real licence Worker
-// under `wrangler dev` (run.sh starts both and seeds the contributors):
-// five installs send their closed hour, the cloud stores the cells, NX
-// publishes a report, and each install fetches it — the licensed ones in
-// full, the free one disruption only — verified against the feed key
-// built into Insight. The model call itself is not part of the walk: it
-// needs Cloudflare's AI binding; run.sh writes a finished run in its place.
+// The Mode B walk against a running NX cloud at NX_CLOUD_WALK_URL, which a
+// harness outside this repository starts, seeds with the walk's
+// contributors and publishes a report to: five installs send their closed
+// hour, the cloud stores the cells, and each install fetches the report —
+// the licensed ones in full, the free one disruption only — verified
+// against the feed key built into Insight.
 package cloud_test
 
 import (
@@ -28,15 +27,16 @@ import (
 	"github.com/nx-panel/insight/internal/tunnels"
 )
 
-// Seed is install i's key seed: run.sh derives the same public keys.
+// Seed is install i's key seed; TestPrintKeys prints the public keys the
+// harness seeds.
 func Seed(i int) []byte {
 	s := make([]byte, ed25519.SeedSize)
 	copy(s, fmt.Sprintf("nx-insight-walk-install-%d", i))
 	return s
 }
 
-// fakePanel takes the key as the panel does; the walk's licence Worker has
-// the contributors seeded by run.sh instead of a heartbeat delivering them.
+// fakePanel takes the key as the panel does; the harness seeds the
+// contributors instead of a heartbeat delivering them.
 type fakePanel struct{}
 
 func (fakePanel) Put(context.Context, string, any, any) error { return nil }
@@ -93,7 +93,7 @@ func must(t *testing.T, err error) {
 func TestCloudWalk(t *testing.T) {
 	url := os.Getenv("NX_CLOUD_WALK_URL")
 	if url == "" {
-		t.Skip("NX_CLOUD_WALK_URL is not set (walk/cloud/run.sh)")
+		t.Skip("NX_CLOUD_WALK_URL is not set")
 	}
 	now := time.Now().Unix()
 	hour := now - now%3600 - 3600
@@ -112,7 +112,7 @@ func TestCloudWalk(t *testing.T) {
 			t.Fatalf("install %d did not send its hour: %+v", i, st)
 		}
 	}
-	// run.sh publishes once the cells are stored; it waits for this file.
+	// The harness publishes once the cells are stored; it waits for this file.
 	if dir := os.Getenv("NX_CLOUD_WALK_DIR"); dir != "" {
 		must(t, os.WriteFile(filepath.Join(dir, "sent"), []byte(fmt.Sprint(hour)), 0o600))
 		deadline := time.Now().Add(90 * time.Second)
@@ -121,7 +121,7 @@ func TestCloudWalk(t *testing.T) {
 				break
 			}
 			if time.Now().After(deadline) {
-				t.Fatal("run.sh did not publish")
+				t.Fatal("the harness did not publish")
 			}
 			time.Sleep(time.Second)
 		}

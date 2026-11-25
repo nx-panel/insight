@@ -26,7 +26,7 @@ func suspicion(t *testing.T, gdb *gorm.DB, node uint, inbound string) detect.Sus
 	return s
 }
 
-// TestAReplayRaisesTheScoreAndProbedOnce is PT9's done_when in the addon:
+// TestAReplayRaisesTheScoreAndProbedOnce:
 // replayed handshakes raise the endpoint's score; at ProbedAt one
 // endpoint.probed alert goes out, not one per evaluation; the episode ends
 // once the evidence ages out, and a path alert that follows is read back as
