@@ -33,16 +33,31 @@ registers with your panel and, through the panel, with NX's licence service
 — per client network (AS number, registered name, country, estimated
 region) and per hosting network of your nodes (AS number, name, country),
 per protocol shape (protocol, transport, TLS or REALITY, direct or through
-a CDN): connections accepted, authenticated and cut early, failures by
-class and by signature (bytes read, seconds to failure), replayed
-handshakes, round-trip and session-time sums, and Insight's own reading of
-the cell (fine, degraded, network outage, the node's address blocked, its
-tunnel down). Never a client's or a node's address, a node's name or
-number, an inbound's tag, a domain, an SNI, a path or your panel's address.
-The page shows every batch as it went out. Turning Mode B off removes the
-key from your panel and drops whatever had not been sent. NX publishes a
-report only from networks that at least five independent operators share;
-a panel without a licence receives outages and throttling only. Insight
+a CDN) and TCP or UDP: connections accepted, authenticated and cut early,
+failures by class and by signature (bytes read, seconds to failure),
+replayed handshakes, follow-up failures (a failure soon after another
+network's success), round-trip and session-time sums with their sample
+counts, and Insight's own reading of the cell (fine, degraded, network
+outage, the node's address blocked, its tunnel down); with them, Insight's
+own version. Never a client's or a node's address, a node's name or number,
+an inbound's tag, a domain, an SNI, a path or your panel's address. The
+page shows every batch as it went out. Turning Mode B off removes the key
+from your panel (retried until the panel takes it) and drops whatever had
+not been sent; a batch already on its way still lands. An hour whose nodes'
+protocol shapes are not known yet (the panel unreachable, or listing none)
+waits for them, for at most 48 hours, after which it is skipped for good.
+However late an hour is built, its cells carry what Insight found in
+that hour, not when it is built: a cell is marked by anything an
+evaluation in its hour found (its path degraded, its network out, its
+node's address blocked, its tunnel down). Only what Insight judged in
+that run counts: a state the last run left, or one read before a break in
+the panel's feed, counts once it is read again, and a path too quiet to
+judge, or on a node not counting, counts as nothing. Nothing is recorded
+while Mode B is off, so the hour you turn it on in carries what was found
+from then; an hour with nothing found in it (Insight not running, or
+before an upgrade to this version) is sent as fine. NX publishes a report
+only from networks that at least five independent operators share; a
+panel without a licence receives outages and throttling only. Insight
 asks for a newer report when it starts and when you open the page,
 sending the time of the report it holds.
 

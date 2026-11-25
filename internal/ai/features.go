@@ -44,8 +44,9 @@ type Path struct {
 	// that worked and never one that failed (a WireGuard server answers
 	// none), so Accepted is its handshakes and Success and Fail are
 	// unknown (-1). Read off the numbers: an inbound accepts every
-	// connection it authenticates, so only an endpoint has authenticated
-	// sessions and nothing accepted.
+	// connection it authenticates, and so do OpenVPN and OpenConnect
+	// endpoints, so only a WireGuard endpoint has authenticated sessions
+	// and nothing accepted. The rows carry no shape, hence the numbers.
 	Endpoint bool
 }
 

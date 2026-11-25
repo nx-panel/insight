@@ -1,5 +1,6 @@
 // Small formatting shared by the views.
 
+import { asnName } from './asn'
 import { i18n } from './i18n'
 
 export function pct(part: number, whole: number) {
@@ -30,15 +31,11 @@ export function asnLabel(asn: number, org: string) {
   return org ? `AS${asn} · ${org}` : `AS${asn}`
 }
 
-// asnShort is a network's short name: the first word of its registered
-// name without the "-AS" every registry tacks on ("MCCI-AS Mobile
-// Communication Company of Iran PLC" is MCCI), or its number when it has
-// no name. The full name and number are asnLabel's, for a tooltip.
+// asnShort is a network's short name (asn.ts), the "other" bucket's in the
+// admin's language. The full name and number are asnLabel's, for a tooltip.
 export function asnShort(asn: number, org: string) {
   if (!asn) return i18n.global.t('matrix.otherAsn')
-  const first = (org || '').trim().split(/[\s,]+/)[0] ?? ''
-  const short = first.replace(/[-_]?AS(N)?[-_]?\d*$/i, '').replace(/[-_]+$/, '')
-  return short || first || `AS${asn}`
+  return asnName(asn, org)
 }
 
 // countryName is a country's name in the admin's language, its code when

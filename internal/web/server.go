@@ -53,6 +53,8 @@ type Server struct {
 	countries []string
 	settings  *settings.Live
 	alerts    *alert.Live
+	// tested and forced hold back the Telegram test and the report check.
+	tested, forced gate
 
 	mu      sync.Mutex
 	pending map[string]pendingLogin
@@ -200,6 +202,26 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func serverError(w http.ResponseWriter, err error) {
 	log.Printf("web: %v", err)
 	writeCode(w, http.StatusInternalServerError, "internal", "internal error")
+}
+
+// gate lets one action through, then none for a while.
+type gate struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+// allow reports whether the action may run now, and counts it as run.
+func (g *gate) allow(every time.Duration) bool { return g.allowAt(time.Now(), every) }
+
+// allowAt is allow at the time given.
+func (g *gate) allowAt(now time.Time, every time.Duration) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.at.IsZero() && now.Sub(g.at) < every {
+		return false
+	}
+	g.at = now
+	return true
 }
 
 // writeCode is an error with a code the admin web translates

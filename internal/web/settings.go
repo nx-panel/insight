@@ -6,10 +6,10 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/nx-panel/insight/internal/ai"
+	"github.com/nx-panel/insight/internal/alert"
 	"github.com/nx-panel/insight/internal/config"
 	"github.com/nx-panel/insight/internal/model"
 	"github.com/nx-panel/insight/internal/settings"
@@ -104,47 +104,50 @@ func (s *Server) handleSettingsPut(w http.ResponseWriter, r *http.Request, _ mod
 		badBody(w)
 		return
 	}
-	old, _ := s.settings.Get()
-	v := settings.Values{
-		TelegramToken: old.TelegramToken, TelegramProxy: ai.UnmaskProxy(body.TelegramProxy, old.TelegramProxy),
-		TelegramAPI: body.TelegramAPI, Language: body.Language, MetricsToken: old.MetricsToken,
-	}
+	var chat int64
 	if body.TelegramChat != "" {
-		chat, err := strconv.ParseInt(body.TelegramChat, 10, 64)
-		if err != nil {
+		var err error
+		if chat, err = strconv.ParseInt(body.TelegramChat, 10, 64); err != nil {
 			writeCode(w, http.StatusBadRequest, "settings_chat_id", "the chat id must be a number")
 			return
 		}
-		v.TelegramChat = chat
 	}
-	switch {
-	case body.TelegramToken != "":
-		v.TelegramToken = body.TelegramToken
-	case body.ClearTelegramToken:
-		v.TelegramToken = ""
-	case v.TelegramToken != "" && trimAPI(body.TelegramAPI) != trimAPI(old.TelegramAPI):
-		writeCode(w, http.StatusBadRequest, "settings_retype_token", "the Bot API address changed: type the bot's token again")
-		return
-	}
-	switch {
-	case body.MetricsToken != "":
-		v.MetricsToken = body.MetricsToken
-	case body.ClearMetricsToken:
-		v.MetricsToken = ""
-	}
-	if err := s.settings.Set(r.Context(), v); err != nil {
+	err := s.settings.Update(r.Context(), func(old settings.Values) (settings.Values, error) {
+		v := settings.Values{
+			TelegramToken: old.TelegramToken, TelegramChat: chat, TelegramProxy: ai.UnmaskProxy(body.TelegramProxy, old.TelegramProxy),
+			TelegramAPI: body.TelegramAPI, Language: body.Language, MetricsToken: old.MetricsToken,
+		}
+		switch {
+		case body.ClearTelegramToken: // wins over a token typed alongside
+			v.TelegramToken = ""
+		case body.TelegramToken != "":
+			v.TelegramToken = body.TelegramToken
+		case v.TelegramToken != "" && trimAPI(body.TelegramAPI) != trimAPI(old.TelegramAPI):
+			return v, errRetypeToken
+		}
+		switch {
+		case body.MetricsToken != "":
+			v.MetricsToken = body.MetricsToken
+		case body.ClearMetricsToken:
+			v.MetricsToken = ""
+		}
+		return v, nil
+	})
+	if err != nil {
 		for _, c := range []struct {
-			err  error
-			code string
+			err    error
+			code   string
+			params []string
 		}{
-			{settings.ErrLanguage, "settings_language"},
-			{settings.ErrMetrics, "settings_metrics"},
-			{settings.ErrProxy, "settings_proxy"},
-			{settings.ErrAPI, "settings_api"},
-			{settings.ErrChat, "settings_chat"},
+			{errRetypeToken, "settings_retype_token", nil},
+			{settings.ErrLanguage, "settings_language", nil},
+			{settings.ErrMetrics, "settings_metrics", []string{"min", strconv.Itoa(config.MinMetricsToken)}},
+			{settings.ErrProxy, "settings_proxy", nil},
+			{settings.ErrAPI, "settings_api", nil},
+			{settings.ErrChat, "settings_chat", nil},
 		} {
 			if errors.Is(err, c.err) {
-				writeCode(w, http.StatusBadRequest, c.code, err.Error(), "min", strconv.Itoa(config.MinMetricsToken))
+				writeCode(w, http.StatusBadRequest, c.code, err.Error(), c.params...)
 				return
 			}
 		}
@@ -153,6 +156,9 @@ func (s *Server) handleSettingsPut(w http.ResponseWriter, r *http.Request, _ mod
 	}
 	writeJSON(w, http.StatusOK, s.settingsView())
 }
+
+// errRetypeToken is a kept token whose Bot API address moved.
+var errRetypeToken = errors.New("the Bot API address changed: type the bot's token again")
 
 func trimAPI(u string) string { return strings.TrimRight(strings.TrimSpace(u), "/") }
 
@@ -170,30 +176,25 @@ func (s *Server) handleSettingsReset(w http.ResponseWriter, r *http.Request, _ m
 	writeJSON(w, http.StatusOK, s.settingsView())
 }
 
-var tested struct {
-	sync.Mutex
-	at time.Time
-}
-
 // handleTelegramTest is POST /api/settings/telegram/test: one message to
 // the chat in force, at most every ten seconds; the Bot API's refusal is
 // passed on as it came, since it is what says what is wrong.
 func (s *Server) handleTelegramTest(w http.ResponseWriter, r *http.Request, _ model.Admin) {
-	if s.alerts == nil || s.alerts.Current() == nil {
+	var cur *alert.Telegram
+	if s.alerts != nil {
+		cur = s.alerts.Current()
+	}
+	if cur == nil {
 		writeCode(w, http.StatusConflict, "telegram_off", "no bot and chat are set")
 		return
 	}
-	tested.Lock()
-	if time.Since(tested.at) < 10*time.Second {
-		tested.Unlock()
+	if !s.tested.allow(10 * time.Second) {
 		writeCode(w, http.StatusTooManyRequests, "too_soon", "asked less than ten seconds ago")
 		return
 	}
-	tested.at = time.Now()
-	tested.Unlock()
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
-	if err := s.alerts.Current().Test(ctx); err != nil {
+	if err := cur.Test(ctx); err != nil {
 		writeCode(w, http.StatusBadGateway, "telegram_failed", err.Error(), "error", err.Error())
 		return
 	}

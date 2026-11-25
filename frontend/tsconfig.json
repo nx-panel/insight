@@ -13,5 +13,8 @@
     "jsx": "preserve",
     "strict": true
   },
-  "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue"]
+  "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue"],
+  // The tests run under Node (npm run test); their only types it lacks are
+  // node:test's and node:assert's, which no dependency here provides.
+  "exclude": ["src/**/*.test.ts"]
 }

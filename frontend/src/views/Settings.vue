@@ -264,7 +264,7 @@ const install = computed(() => {
                 size="small"
                 type="button"
                 class="self-start"
-                @click="save({ clearTelegramToken: true, telegramChat: '' })"
+                @click="save({ clearTelegramToken: true, telegramToken: '', telegramChat: '' })"
               />
             </div>
             <div class="field">

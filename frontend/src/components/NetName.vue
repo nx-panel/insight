@@ -4,15 +4,16 @@ import { asnLabel, asnShort } from '../format'
 
 // A client or hosting network by its short name, with its number and full
 // registered name behind an ⓘ: on hover with a mouse, on a tap on a phone
-// (the icon takes focus, which shows the tooltip too).
-const props = defineProps<{ asn: number; org: string }>()
+// (the icon takes focus, which shows the tooltip too). iconOnly is the ⓘ
+// alone, for a sentence that already names the network.
+const props = defineProps<{ asn: number; org: string; iconOnly?: boolean }>()
 const short = computed(() => asnShort(props.asn, props.org))
 const full = computed(() => asnLabel(props.asn, props.org))
 </script>
 
 <template>
   <span class="net">
-    <span class="name">{{ short }}</span>
+    <span v-if="!iconOnly" class="name">{{ short }}</span>
     <i
       v-if="asn"
       v-tooltip.top.both="full"

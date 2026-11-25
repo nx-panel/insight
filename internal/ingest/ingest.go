@@ -105,17 +105,21 @@ type NodeState struct {
 type Shape struct {
 	Tag       string `json:"tag"`
 	Kind      string `json:"kind"` // inbound | endpoint
-	Type      string `json:"type"`
+	Type      string `json:"type"` // the protocol: vless, wireguard, openvpn-server…
 	Transport string `json:"transport,omitempty"`
 	Security  string `json:"security,omitempty"`
 	Fronted   bool   `json:"fronted"`
 }
 
-// KindEndpoint is a Shape of a WireGuard, OpenVPN or OpenConnect endpoint.
-// A WireGuard server answers a handshake it cannot authenticate with
-// silence, so its cells count only what got through — handshakes and
-// bytes — never accepted or failed.
+// KindEndpoint is a Shape of a listening endpoint (WireGuard, OpenVPN,
+// OpenConnect) rather than an inbound.
 const KindEndpoint = "endpoint"
+
+// HandshakeOnly reports whether a shape's cells count only what got
+// through — handshakes and bytes, never accepted or failed: a WireGuard
+// endpoint, whose server answers a handshake it cannot authenticate with
+// silence. An OpenVPN or OpenConnect endpoint counts like an inbound.
+func (s Shape) HandshakeOnly() bool { return s.Kind == KindEndpoint && s.Type == "wireguard" }
 
 // TunnelSample is one node's counts for one node-to-node tunnel link since
 // its previous drain, as polled.
@@ -135,7 +139,7 @@ type TunnelSample struct {
 }
 
 // A node's state as the panel lists it: StateNodeOn is the one that counts
-// (the panel's gateway.PathNodeOn). StateSkewed is Insight's own: a node
+// (the panel's node-on state). StateSkewed is Insight's own: a node
 // whose clock is wrong enough that its samples are dropped.
 const (
 	StateNodeOn = "on"
@@ -224,6 +228,9 @@ type Ingest struct {
 	cursor uint64
 	loaded bool
 	status Status
+	// polled is set by the first poll that reached the panel; ready once a
+	// flush and what follows it (the detector) have run after that.
+	polled, ready bool
 }
 
 func (in *Ingest) now() time.Time {
@@ -244,6 +251,15 @@ func (in *Ingest) Status() Status {
 	s.Nodes = append([]NodeState(nil), s.Nodes...)
 	s.Pending = len(in.pending)
 	return s
+}
+
+// Ready reports whether the first poll that reached the panel has been
+// flushed and worked through: the shapes, the detector and the hints hold
+// what the panel says. Until then nothing built from them is trustworthy.
+func (in *Ingest) Ready() bool {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	return in.ready
 }
 
 // Shapes is what each node served as of the last poll, by node and tag;
@@ -283,13 +299,26 @@ func (in *Ingest) Run(ctx context.Context) {
 		case <-poll.C:
 			in.pollLogged(ctx)
 		case <-flush.C:
-			if err := in.Flush(ctx); err != nil {
+			if err := in.flushRound(ctx); err != nil {
 				log.Printf("ingest: flush: %v", err)
-			} else if in.AfterFlush != nil {
-				in.AfterFlush(ctx)
 			}
 		}
 	}
+}
+
+// flushRound is Run's flush: the flush, then AfterFlush, then Ready once a
+// poll that reached the panel came before.
+func (in *Ingest) flushRound(ctx context.Context) error {
+	if err := in.Flush(ctx); err != nil {
+		return err
+	}
+	if in.AfterFlush != nil {
+		in.AfterFlush(ctx)
+	}
+	in.mu.Lock()
+	in.ready = in.polled
+	in.mu.Unlock()
+	return nil
 }
 
 func (in *Ingest) pollLogged(ctx context.Context) {
@@ -363,6 +392,7 @@ func (in *Ingest) Poll(ctx context.Context) error {
 		}
 		in.fed(true, nodes)
 		in.mu.Lock()
+		in.polled = true
 		stuck := in.cursor == since
 		in.mu.Unlock()
 		// The panel's limit counts the cells and the tunnel links together.

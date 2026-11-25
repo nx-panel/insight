@@ -22,6 +22,7 @@ import (
 	"github.com/nx-panel/insight/internal/config"
 	"github.com/nx-panel/insight/internal/db"
 	"github.com/nx-panel/insight/internal/detect"
+	"github.com/nx-panel/insight/internal/ingest"
 	"github.com/nx-panel/insight/internal/model"
 	"github.com/nx-panel/insight/internal/netinfo"
 	"github.com/nx-panel/insight/internal/settings"
@@ -52,6 +53,13 @@ func (p *tunnelPanel) Get(_ context.Context, path string, out any) error {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
+	return newEnvWith(t, nil)
+}
+
+// newEnvWith is newEnv with an ingest whose shapes the server reads; its
+// DB is set to the env's.
+func newEnvWith(t *testing.T, in *ingest.Ingest) *env {
+	t.Helper()
 	dir := t.TempDir()
 	gdb, err := db.Open(config.Config{Driver: config.DriverSQLite, DSN: filepath.Join(dir, "i.db")})
 	if err != nil {
@@ -76,7 +84,10 @@ func newEnv(t *testing.T) *env {
 	if err := live.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	s := New(gdb, a, config.Config{}, "0.1.0", nil, Parts{Detect: det, Net: net, Tunnels: tw, Settings: live, Alerts: tg})
+	if in != nil {
+		in.DB = gdb
+	}
+	s := New(gdb, a, config.Config{}, "0.1.0", nil, Parts{Ingest: in, Detect: det, Net: net, Tunnels: tw, Settings: live, Alerts: tg})
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	jar, _ := cookiejar.New(nil)
@@ -171,6 +182,57 @@ func TestTheMatrixAndTheNodes(t *testing.T) {
 	}
 	if code := e.call("PUT", "/api/nodes/9/override", map[string]any{"city": "x"}, nil); code != http.StatusNotFound {
 		t.Fatalf("an unknown node = %d", code)
+	}
+}
+
+// shapesPanel answers a poll with no samples and the nodes' shapes.
+type shapesPanel []ingest.NodeState
+
+func (p shapesPanel) Get(_ context.Context, _ string, out any) error {
+	raw, err := json.Marshal(map[string]any{"active": true, "nodes": p})
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(raw, out)
+}
+
+// TestOnlyAWireGuardCellIsServedAsHandshakes: a WireGuard endpoint's cell
+// is served with kind "endpoint" (handshakes only); an OpenVPN endpoint's,
+// which counts accepted and failed like an inbound's, is served as an
+// inbound's, so a cell with ninety failures in a hundred reads as one.
+func TestOnlyAWireGuardCellIsServedAsHandshakes(t *testing.T) {
+	in := &ingest.Ingest{Panel: func() ingest.Getter {
+		return shapesPanel{{ID: 1, State: ingest.StateNodeOn, Inbounds: []ingest.Shape{
+			{Tag: "wg", Kind: ingest.KindEndpoint, Type: "wireguard"},
+			{Tag: "ovpn", Kind: ingest.KindEndpoint, Type: "openvpn-server"},
+		}}}
+	}}
+	e := newEnvWith(t, in)
+	if err := in.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	e.call("POST", "/api/login", map[string]string{"username": "admin", "password": "admin-secret-1"}, nil)
+	hour := time.Now().Truncate(time.Hour).Unix()
+	cell := func(inbound string, c model.PathCounters) {
+		e.db.Create(&model.PathHour{
+			Hour: hour, PathCell: model.PathCell{NodeID: 1, Inbound: inbound, ClientASN: 44244, Country: "IR", Network: "tcp", SourceKind: "peer"},
+			PathCounters: c,
+		})
+	}
+	cell("wg", model.PathCounters{Authed: 10})
+	cell("ovpn", model.PathCounters{Accepted: 100, Authed: 10, FailedAuth: 90})
+	var m struct {
+		Cells []cellView `json:"cells"`
+	}
+	if code := e.call("GET", "/api/matrix?hours=6", nil, &m); code != http.StatusOK || len(m.Cells) != 2 {
+		t.Fatalf("matrix = %d %+v", code, m.Cells)
+	}
+	kinds := map[string]string{}
+	for _, c := range m.Cells {
+		kinds[c.Inbound] = c.Kind
+	}
+	if kinds["wg"] != ingest.KindEndpoint || kinds["ovpn"] != "" {
+		t.Fatalf("kinds = %v, want wg an endpoint and ovpn an inbound", kinds)
 	}
 }
 
@@ -310,5 +372,21 @@ func TestAISettingsKeepTheKeyServerSide(t *testing.T) {
 	}
 	if code := e.call("GET", "/api/ai/reports?country=IR", nil, &reports); code != http.StatusOK || len(reports.Reports) != 1 || reports.Orgs["44244"] != "MCI" {
 		t.Fatalf("reports = %d %+v", code, reports)
+	}
+}
+
+// TestTheGateLetsOneActionThroughPerWindow: the first action goes through,
+// a second within the window does not, one after it does.
+func TestTheGateLetsOneActionThroughPerWindow(t *testing.T) {
+	var g gate
+	t0 := time.Unix(1_700_000_000, 0)
+	if !g.allowAt(t0, time.Minute) {
+		t.Fatal("the first action was refused")
+	}
+	if g.allowAt(t0.Add(59*time.Second), time.Minute) {
+		t.Fatal("a second action within the window went through")
+	}
+	if !g.allowAt(t0.Add(time.Minute), time.Minute) {
+		t.Fatal("an action after the window was refused")
 	}
 }

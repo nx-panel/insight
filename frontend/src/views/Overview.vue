@@ -136,7 +136,9 @@ function rowsOf(list: Cell[], abroad: boolean): Row[] {
         cells: new Map(),
       }
     } else {
-      key = `${c.asn}`
+      // Abroad, a network's rows are one per country: folded ASN 0 spans
+      // several, and each is its own row.
+      key = abroad ? `${c.asn}/${cc}` : `${c.asn}`
       row = {
         key,
         asn: c.asn,
@@ -148,7 +150,11 @@ function rowsOf(list: Cell[], abroad: boolean): Row[] {
       }
     }
     row = out.get(key) ?? (out.set(key, row), row)
-    row.total += c.accepted
+    // A cell's weight is its connections: accepted, or authed for a cell
+    // with none accepted (an endpoint cell, WireGuard, has only handshakes).
+    // A row's total adds its cells' weights; adding accepted and authed
+    // would count an inbound's authenticated connections twice.
+    row.total += c.accepted > 0 ? c.accepted : c.authed
     const col = `${c.nodeId}/${c.inbound}`
     const have = row.cells.get(col)
     if (have) {

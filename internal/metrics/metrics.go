@@ -10,6 +10,7 @@
 package metrics
 
 import (
+	"context"
 	"crypto/subtle"
 	"fmt"
 	"io"
@@ -68,7 +69,7 @@ func Handler(tokenOf func() string, src Sources) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		if err := Write(w, src); err != nil {
+		if err := Write(r.Context(), w, src); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	}
@@ -83,7 +84,7 @@ type pathKey struct {
 }
 
 // Write writes every metric.
-func Write(out io.Writer, src Sources) error {
+func Write(ctx context.Context, out io.Writer, src Sources) error {
 	now := time.Now()
 	if src.Now != nil {
 		now = src.Now()
@@ -91,7 +92,7 @@ func Write(out io.Writer, src Sources) error {
 	names := map[uint]string{}
 	if src.DB != nil {
 		var nodes []model.NodeNetinfo
-		if err := src.DB.Select("node_id", "name").Find(&nodes).Error; err != nil {
+		if err := src.DB.WithContext(ctx).Select("node_id", "name").Find(&nodes).Error; err != nil {
 			return err
 		}
 		for _, n := range nodes {
@@ -196,7 +197,10 @@ func Write(out io.Writer, src Sources) error {
 		}
 		labels := func(k pathKey) []string {
 			kind := "inbound"
-			if shapes[k.node][k.inbound].Kind == ingest.KindEndpoint {
+			// "endpoint" only for a handshake-only (WireGuard) path, whose
+			// success ratio is unknown; OpenVPN and OpenConnect count like
+			// an inbound and are labelled one.
+			if shapes[k.node][k.inbound].HandshakeOnly() {
 				kind = ingest.KindEndpoint
 			}
 			return []string{
@@ -204,18 +208,22 @@ func Write(out io.Writer, src Sources) error {
 				"inbound", k.inbound, "kind", kind, "asn", k.asn, "org", org(k.asn), "network", k.network,
 			}
 		}
+		labelled := make([][]string, len(keys))
+		for i, k := range keys {
+			labelled[i] = labels(k)
+		}
 		for _, metric := range []struct {
 			name, help string
 			value      func(model.PathCounters) uint64
 		}{
-			{"insight_path_accepted_15m", "Connections accepted in the last fifteen minutes, per node, inbound and client network (an endpoint accepts none it can be seen to).", func(c model.PathCounters) uint64 { return c.Accepted }},
-			{"insight_path_authed_15m", "Sessions authenticated in the last fifteen minutes (an endpoint's: handshakes that worked).", func(c model.PathCounters) uint64 { return c.Authed }},
+			{"insight_path_accepted_15m", "Connections accepted in the last fifteen minutes, per node, inbound and client network (a WireGuard endpoint, kind=endpoint, accepts none it can be seen to).", func(c model.PathCounters) uint64 { return c.Accepted }},
+			{"insight_path_authed_15m", "Sessions authenticated in the last fifteen minutes (a WireGuard endpoint's, kind=endpoint: handshakes that worked).", func(c model.PathCounters) uint64 { return c.Authed }},
 			{"insight_path_failed_15m", "Connections that failed before authenticating in the last fifteen minutes.", func(c model.PathCounters) uint64 { return c.FailedAuth }},
 			{"insight_path_early_close_15m", "Authenticated sessions cut within seconds having moved almost nothing, in the last fifteen minutes.", func(c model.PathCounters) uint64 { return c.EarlyClose }},
 		} {
 			m.help(metric.name, "gauge", metric.help)
-			for _, k := range keys {
-				m.sample(metric.name, labels(k), float64(metric.value(folded[k])))
+			for i, k := range keys {
+				m.sample(metric.name, labelled[i], float64(metric.value(folded[k])))
 			}
 		}
 
@@ -270,7 +278,7 @@ func Write(out io.Writer, src Sources) error {
 
 	if src.DB != nil {
 		var probed []detect.Suspicion
-		if err := src.DB.Where("score > 0").Order("score DESC, node_id, inbound").Limit(maxProbed).Find(&probed).Error; err != nil {
+		if err := src.DB.WithContext(ctx).Where("score > 0").Order("score DESC, node_id, inbound").Limit(maxProbed).Find(&probed).Error; err != nil {
 			return err
 		}
 		m.help("insight_probe_score", "gauge", "Each endpoint's probing score, 0–100, over the last six hours (at most 200, the highest).")
@@ -281,7 +289,7 @@ func Write(out io.Writer, src Sources) error {
 			Kind string
 			N    int64
 		}
-		if err := src.DB.Model(&detect.Alert{}).Select("kind, COUNT(*) AS n").Where("at >= ?", now.Add(-24*time.Hour).Unix()).
+		if err := src.DB.WithContext(ctx).Model(&detect.Alert{}).Select("kind, COUNT(*) AS n").Where("at >= ?", now.Add(-24*time.Hour).Unix()).
 			Group("kind").Order("kind").Scan(&counts).Error; err != nil {
 			return err
 		}

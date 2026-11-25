@@ -217,7 +217,7 @@ func run() error {
 	// the admin turns it on (internal/cloud).
 	nx := &cloud.Cloud{
 		DB: gdb, URL: cfg.CloudURL,
-		Sources: cloud.Sources{DB: gdb, State: det, Shapes: in.Shapes, Tunnels: tw.Views, Org: net.Org, Version: a.Manifest().Version},
+		Sources: cloud.Sources{DB: gdb, Shapes: in.Shapes, Tunnels: tw.Views, Org: net.Org, Version: a.Manifest().Version, Ready: in.Ready},
 		Panel: func() cloud.Panel {
 			c := a.Credentials()
 			if c == nil || c.Token == "" {
@@ -230,6 +230,12 @@ func run() error {
 	in.AfterFlush = func(ctx context.Context) {
 		flushed(ctx)
 		brain.Tick(bg)
+	}
+	// Each evaluation that judged, for its hour's Mode B verdicts.
+	det.OnRead = func(ctx context.Context, r detect.Reading) {
+		if err := nx.Mark(ctx, r); err != nil {
+			log.Printf("cloud: %v", err)
+		}
 	}
 	var work sync.WaitGroup
 	refreshNodes := func() {

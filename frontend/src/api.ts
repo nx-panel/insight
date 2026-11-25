@@ -112,7 +112,8 @@ export interface Cell {
   down: number
   degraded: boolean
   // 'endpoint': a WireGuard endpoint's cell, which counts only the
-  // handshakes that worked — never a failure.
+  // handshakes that worked — never a failure. Absent for an inbound's cell
+  // and for an OpenVPN or OpenConnect endpoint's, which count like one.
   kind?: 'endpoint'
 }
 
@@ -283,6 +284,8 @@ export interface CloudBatch {
   nextAt: number
   sentAt: number
   lastError: string
+  // The cloud refused this batch for good; it stays unsent.
+  refused: boolean
 }
 
 export interface CloudCell {
@@ -339,6 +342,8 @@ export interface CloudState {
   url: string
   fingerprint: string
   registered: boolean
+  // Off with a key the panel may still hold: its removal is retried.
+  removing: boolean
   error?: string
   pending: number
   failed: number

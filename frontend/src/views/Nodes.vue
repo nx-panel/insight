@@ -12,6 +12,7 @@ import Tag from 'primevue/tag'
 import Message from 'primevue/message'
 import { api, type NodeInfo, type Override, type Shape, type TunnelOnNode } from '../api'
 import { num, when } from '../format'
+import { handshakeOnly } from '../shape'
 import NetName from '../components/NetName.vue'
 
 const { t } = useI18n()
@@ -66,7 +67,7 @@ function clear() {
 }
 
 function shapeTitle(i: Shape) {
-  if (i.kind === 'endpoint') return `${i.type} · ${t('nodes.endpointNote')}`
+  if (handshakeOnly(i)) return `${i.type} · ${t('nodes.endpointNote')}`
   return [
     i.type,
     i.transport && i.transport !== 'none' ? i.transport : '',

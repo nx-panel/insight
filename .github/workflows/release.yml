@@ -2,10 +2,10 @@
 # release with the binaries the script install downloads and their checksums,
 # last, so the directory never sees a release whose image is missing. The
 # manifest must name the tag's version and carry NX's signature — signed
-# on the owner's machine (scripts/sign.sh) before the tag is pushed, since the
-# signature covers the version. The `sign` job then signs the release's
-# SHA256SUMS (scripts/sign-sums.sh) — the panel installs a release by itself
-# only when SHA256SUMS.sig is there.
+# on the release signer's machine (scripts/sign.sh) before the tag is
+# pushed, since the signature covers the version. The `sign` job then signs
+# the release's SHA256SUMS (scripts/sign-sums.sh) — the panel installs a
+# release by itself only when SHA256SUMS.sig is there.
 name: release
 on:
   push:

@@ -265,11 +265,7 @@ func seed(dir, feedFile string) error {
 	}
 
 	// Mode B: on since a day ago, its batches, and NX's report.
-	put := func(k, v string) error { return gdb.Save(&model.State{Key: k, Value: v}).Error }
-	if err := put("cloud_on", "on"); err != nil {
-		return err
-	}
-	if err := put("cloud_built_through", fmt.Sprint(hour.Unix())); err != nil {
+	if err := cloud.SeedOn(ctx, gdb, hour.Unix()); err != nil {
 		return err
 	}
 	for h := 1; h <= 6; h++ {
@@ -287,7 +283,7 @@ func seed(dir, feedFile string) error {
 		}
 	}
 	if feedFile != "" {
-		if err := report(gdb, feedFile, now); err != nil {
+		if err := report(ctx, gdb, feedFile, now); err != nil {
 			return err
 		}
 	}
@@ -373,7 +369,7 @@ func batch(hour int64) ([]byte, int, error) {
 }
 
 // report writes a report signed with the feed key, as Insight keeps one.
-func report(gdb *gorm.DB, feedFile string, now time.Time) error {
+func report(ctx context.Context, gdb *gorm.DB, feedFile string, now time.Time) error {
 	raw, err := os.ReadFile(feedFile)
 	if err != nil {
 		return err
@@ -401,14 +397,7 @@ func report(gdb *gorm.DB, feedFile string, now time.Time) error {
 		return err
 	}
 	sig := ed25519.Sign(ed25519.NewKeyFromSeed(seed), append([]byte(cloud.ReportContext), payload...))
-	held, err := json.Marshal(map[string]any{
-		"payload": string(payload), "sig": base64.StdEncoding.EncodeToString(sig),
-		"checkedAt": now.Add(-10 * time.Minute).Unix(), "latest": r.ExtractedAt,
-	})
-	if err != nil {
-		return err
-	}
-	return gdb.Save(&model.State{Key: "cloud_report", Value: string(held)}).Error
+	return cloud.SeedReport(ctx, gdb, string(payload), base64.StdEncoding.EncodeToString(sig), now.Add(-10*time.Minute).Unix(), r.ExtractedAt)
 }
 
 func mustJSON(v any) string {

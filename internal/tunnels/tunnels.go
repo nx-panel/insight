@@ -126,6 +126,9 @@ type View struct {
 	// a tunnel with several origins can be up while one of them is cut.
 	Unlinked  []uint `json:"unlinked,omitempty"`
 	CheckedAt int64  `json:"checkedAt,omitempty"`
+	// Judged is whether a status of this run has judged the tunnel: a state
+	// the last run stored, its relay unreachable since, is not.
+	Judged bool `json:"-"`
 }
 
 // View states.
@@ -147,6 +150,8 @@ type judged struct {
 	bad, good int
 	since     int64
 	view      View
+	// read is whether a status of this run judged it (View.Judged).
+	read bool
 }
 
 // Watcher polls the tunnels and keeps their states.
@@ -208,6 +213,7 @@ func (w *Watcher) Views() []View {
 	out := make([]View, 0, len(w.states))
 	for _, st := range w.states {
 		v := st.view
+		v.Judged = st.read
 		v.OriginIDs = append([]uint(nil), v.OriginIDs...)
 		v.OriginNames = append([]string(nil), v.OriginNames...)
 		v.Unlinked = append([]uint(nil), v.Unlinked...)
@@ -346,6 +352,7 @@ func (w *Watcher) Poll(ctx context.Context) error {
 			continue
 		}
 		st.view.Unlinked = unlinked(t.OriginIDs, r.st.Relay)
+		st.read = true
 		if !r.st.Healthy {
 			st.bad, st.good = st.bad+1, 0
 			if !st.down && st.bad >= confirm {

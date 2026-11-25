@@ -2,12 +2,13 @@ package cloud
 
 import (
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"sort"
+	"strings"
 
 	"gorm.io/gorm"
 
@@ -68,20 +69,17 @@ const (
 // MaxCells bounds a batch: the cloud stores at most this many, the busiest.
 const MaxCells = 800
 
-// State is what the detector knows now (the same as Mode A reads).
-type State interface {
-	Degraded() map[detect.Key]bool
-	Outages() map[uint32]bool
-}
-
-// Sources are what a batch is built from.
+// Sources are what Mode B reads: the database, the shapes and the names
+// for build, the tunnels for Mark.
 type Sources struct {
 	DB      *gorm.DB
-	State   State
 	Shapes  func() map[uint]map[string]ingest.Shape
 	Tunnels func() []tunnels.View
 	Org     func(uint32) string
 	Version string
+	// Ready, when set, says whether the ingest has polled and flushed once,
+	// so the shapes hold what the panel names; nil is always ready.
+	Ready func() bool
 }
 
 type globalKey struct {
@@ -92,23 +90,28 @@ type globalKey struct {
 	proto, transport, security, front, network, verdict string
 }
 
-// Build makes the batch of the hour starting at hour. A cell whose inbound
-// the panel's shapes do not name (an older panel, a deleted inbound), or
-// whose client has no network or country, is left out: it has no strategy
-// or no network to be about.
-func Build(ctx context.Context, src Sources, hour int64) (Batch, error) {
+// build makes the batch of the hour starting at hour, with the number of
+// rows the hour holds, so a caller can tell an empty hour from one whose
+// rows no shape named. A cell whose inbound the panel's shapes do not name
+// (an older panel, a deleted inbound), or whose client has no network or
+// country, is left out: it has no strategy or no network to be about. Its
+// verdict is the strongest any evaluation in the hour found (Mark,
+// marks.go, nodesBlocked): its relay's tunnel down, its network in an
+// outage, its node's address blocked, its path degraded, in that order.
+func build(ctx context.Context, src Sources, hour int64) (Batch, int, error) {
 	b := Batch{V: 1, Hour: hour, Insight: src.Version, Cells: []Cell{}}
 	var rows []model.PathHour
 	tx := src.DB.WithContext(ctx)
 	if err := tx.Where("hour = ? AND client_asn <> ?", hour, model.OtherASN).Find(&rows).Error; err != nil {
-		return b, err
+		return b, 0, err
 	}
 	if len(rows) == 0 {
-		return b, nil
+		return b, 0, nil
 	}
+	rowCount := len(rows)
 	var sigRows []model.PathSigHour
 	if err := tx.Where("hour = ? AND client_asn <> ?", hour, model.OtherASN).Find(&sigRows).Error; err != nil {
-		return b, err
+		return b, rowCount, err
 	}
 	sigs := map[model.PathCell]map[string]uint64{}
 	for _, s := range sigRows {
@@ -121,7 +124,7 @@ func Build(ctx context.Context, src Sources, hour int64) (Batch, error) {
 	}
 	var nets []model.NodeNetinfo
 	if err := tx.Find(&nets).Error; err != nil {
-		return b, err
+		return b, rowCount, err
 	}
 	hosts := map[uint]model.NodeNetinfo{}
 	for _, n := range nets {
@@ -131,20 +134,10 @@ func Build(ctx context.Context, src Sources, hour int64) (Batch, error) {
 	if src.Shapes != nil {
 		shapes = src.Shapes()
 	}
-	var degraded map[detect.Key]bool
-	var outages map[uint32]bool
-	if src.State != nil {
-		degraded, outages = src.State.Degraded(), src.State.Outages()
+	marks, err := marksOf(tx, hour)
+	if err != nil {
+		return b, rowCount, err
 	}
-	cut := map[uint]bool{}
-	if src.Tunnels != nil {
-		for _, v := range src.Tunnels() {
-			if v.State == tunnels.Down {
-				cut[v.RelayID] = true
-			}
-		}
-	}
-	blocked := nodesBlocked(rows, degraded, outages)
 
 	cells := map[globalKey]*Cell{}
 	for _, r := range rows {
@@ -154,19 +147,21 @@ func Build(ctx context.Context, src Sources, hour int64) (Batch, error) {
 		}
 		verdict := VerdictOK
 		switch {
-		case cut[r.NodeID]:
+		case marks.cut[r.NodeID]:
 			verdict = VerdictTunnelDown
-		case outages[r.ClientASN]:
+		case marks.outages[r.ClientASN]:
 			verdict = VerdictOutage
-		case blocked[r.NodeID]:
+		case marks.blocked[r.NodeID]:
 			verdict = VerdictNodeDown
-		case degraded[detect.Key{Node: r.NodeID, Inbound: r.Inbound, ASN: r.ClientASN, Network: r.Network}]:
+		case marks.degraded[detect.Key{Node: r.NodeID, Inbound: r.Inbound, ASN: r.ClientASN, Network: r.Network}]:
 			verdict = VerdictDegraded
 		}
 		host := hosts[r.NodeID]
 		nodeASN, nodeOrg, nodeCC, _ := host.Effective()
+		// Keyed on the region as sent: two that differ only past the clip
+		// are one cell, or the cloud would refuse the hour for a cell twice.
 		k := globalKey{
-			asn: r.ClientASN, cc: r.Country, region: r.Region, nodeASN: nodeASN, nodeCC: nodeCC,
+			asn: r.ClientASN, cc: r.Country, region: clip(r.Region, 96), nodeASN: nodeASN, nodeCC: nodeCC,
 			proto: token(sh.Type), transport: token(sh.Transport), security: security(sh.Security), front: front(sh.Fronted),
 			network: r.Network, verdict: verdict,
 		}
@@ -190,17 +185,25 @@ func Build(ctx context.Context, src Sources, hour int64) (Batch, error) {
 	for _, c := range cells {
 		b.Cells = append(b.Cells, *c)
 	}
+	// A cell's weight is its connections: accepted, or authed for a cell
+	// with none accepted (an endpoint cell, WireGuard, has only handshakes).
+	weight := func(c Cell) uint64 {
+		if c.Accepted > 0 {
+			return c.Accepted
+		}
+		return c.Authed
+	}
 	sort.Slice(b.Cells, func(i, j int) bool {
-		wi, wj := b.Cells[i].Accepted+b.Cells[i].Authed, b.Cells[j].Accepted+b.Cells[j].Authed
+		wi, wj := weight(b.Cells[i]), weight(b.Cells[j])
 		if wi != wj {
 			return wi > wj
 		}
-		return fmt.Sprint(b.Cells[i]) < fmt.Sprint(b.Cells[j])
+		return less(b.Cells[i], b.Cells[j])
 	})
 	if len(b.Cells) > MaxCells {
 		b.Cells = b.Cells[:MaxCells]
 	}
-	return b, nil
+	return b, rowCount, nil
 }
 
 func add(c *Cell, p model.PathCounters, sigs map[string]uint64) {
@@ -233,31 +236,33 @@ func add(c *Cell, p model.PathCounters, sigs map[string]uint64) {
 	}
 }
 
-// nodesBlocked reads a node's address as blocked for the hour when, outside
-// any ASN outage, at least four in five of its paths with traffic are
-// degraded, across two client networks or more and two inbounds or more: a
-// strategy block shows on one inbound, an address block on all of them.
-func nodesBlocked(rows []model.PathHour, degraded map[detect.Key]bool, outages map[uint32]bool) map[uint]bool {
+// nodesBlocked reads a node's address as blocked at one evaluation when,
+// outside any ASN outage, at least four in five of the paths judged on it
+// are degraded, across two client networks or more and two inbounds or
+// more: a strategy block shows on one inbound, an address block on all of
+// them at once. A path counts whether its window holds traffic or not,
+// since a dead address leaves none.
+func nodesBlocked(judged, degraded map[detect.Key]bool, outages map[uint32]bool) map[uint]bool {
 	type tally struct {
 		paths, bad int
 		asns       map[uint32]bool
 		inbounds   map[string]bool
 	}
 	per := map[uint]*tally{}
-	for _, r := range rows {
-		if outages[r.ClientASN] || r.Accepted+r.Authed == 0 {
+	for k := range judged {
+		if outages[k.ASN] {
 			continue
 		}
-		t := per[r.NodeID]
+		t := per[k.Node]
 		if t == nil {
 			t = &tally{asns: map[uint32]bool{}, inbounds: map[string]bool{}}
-			per[r.NodeID] = t
+			per[k.Node] = t
 		}
 		t.paths++
-		if degraded[detect.Key{Node: r.NodeID, Inbound: r.Inbound, ASN: r.ClientASN, Network: r.Network}] {
+		if degraded[k] {
 			t.bad++
-			t.asns[r.ClientASN] = true
-			t.inbounds[r.Inbound] = true
+			t.asns[k.ASN] = true
+			t.inbounds[k.Inbound] = true
 		}
 	}
 	out := map[uint]bool{}
@@ -300,10 +305,29 @@ func front(fronted bool) string {
 	return "direct"
 }
 
+// less orders two cells of equal weight by their key, field by field.
+func less(a, b Cell) bool {
+	return cmp.Or(
+		cmp.Compare(a.ASN, b.ASN), strings.Compare(a.CC, b.CC), strings.Compare(a.Region, b.Region),
+		cmp.Compare(a.NodeASN, b.NodeASN), strings.Compare(a.NodeCC, b.NodeCC),
+		strings.Compare(a.Proto, b.Proto), strings.Compare(a.Transport, b.Transport), strings.Compare(a.Security, b.Security),
+		strings.Compare(a.Front, b.Front), strings.Compare(a.Network, b.Network), strings.Compare(a.Verdict, b.Verdict),
+	) < 0
+}
+
+// clip cuts s to n UTF-16 units, as the cloud measures a string (a
+// character outside the basic plane counts two), never inside a pair.
 func clip(s string, n int) string {
-	r := []rune(s)
-	if len(r) > n {
-		return string(r[:n])
+	units := 0
+	for i, r := range s {
+		w := 1
+		if r > 0xFFFF {
+			w = 2
+		}
+		if units+w > n {
+			return s[:i]
+		}
+		units += w
 	}
 	return s
 }

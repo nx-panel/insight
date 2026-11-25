@@ -181,3 +181,30 @@ func TestADeletedOrDisabledTunnelIsForgottenSilently(t *testing.T) {
 		t.Fatalf("deleted: views %+v, sent %d", w.Views(), sent)
 	}
 }
+
+// TestAStoredStateIsNotJudgedUntilAStatusIs: after a restart a tunnel the
+// last run stored as down is down but not judged while its relay cannot
+// be asked; a status of this run judges it.
+func TestAStoredStateIsNotJudgedUntilAStatusIs(t *testing.T) {
+	gdb := openDB(t)
+	if err := gdb.Create(&tunnels.TunnelState{TunnelID: 3, Name: "to-de", RelayID: 1, Since: 1}).Error; err != nil {
+		t.Fatal(err)
+	}
+	f := &fakePanel{list: twoTunnels, healthy: map[uint]bool{3: false}, relayUp: map[uint]bool{3: false}}
+	w := &tunnels.Watcher{DB: gdb, Panel: func() tunnels.Getter { return f }}
+	for range 3 {
+		if err := w.Poll(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if v := w.Views()[0]; v.State != tunnels.Down || v.Judged {
+		t.Fatalf("relay unreachable: %+v", v)
+	}
+	f.relayUp[3] = true
+	if err := w.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if v := w.Views()[0]; v.State != tunnels.Down || !v.Judged {
+		t.Fatalf("relay asked: %+v", v)
+	}
+}

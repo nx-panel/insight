@@ -21,10 +21,8 @@ import (
 	"github.com/nx-panel/insight/internal/cloud"
 	"github.com/nx-panel/insight/internal/config"
 	"github.com/nx-panel/insight/internal/db"
-	"github.com/nx-panel/insight/internal/detect"
 	"github.com/nx-panel/insight/internal/ingest"
 	"github.com/nx-panel/insight/internal/model"
-	"github.com/nx-panel/insight/internal/tunnels"
 )
 
 // Seed is install i's key seed; TestPrintKeys prints the public keys the
@@ -41,11 +39,6 @@ type fakePanel struct{}
 
 func (fakePanel) Put(context.Context, string, any, any) error { return nil }
 func (fakePanel) Delete(context.Context, string) error        { return nil }
-
-type noState struct{}
-
-func (noState) Degraded() map[detect.Key]bool { return nil }
-func (noState) Outages() map[uint32]bool      { return nil }
 
 func install(t *testing.T, i int, url string, hour int64, success uint64) *cloud.Cloud {
 	t.Helper()
@@ -73,10 +66,9 @@ func install(t *testing.T, i int, url string, hour int64, success uint64) *cloud
 	return &cloud.Cloud{
 		DB: gdb, URL: url,
 		Sources: cloud.Sources{
-			DB: gdb, State: noState{}, Version: "0.0.2",
-			Shapes:  func() map[uint]map[string]ingest.Shape { return shapes },
-			Tunnels: func() []tunnels.View { return nil },
-			Org:     func(uint32) string { return "MCCI" },
+			DB: gdb, Version: "0.0.2",
+			Shapes: func() map[uint]map[string]ingest.Shape { return shapes },
+			Org:    func(uint32) string { return "MCCI" },
 		},
 		Panel: func() cloud.Panel { return fakePanel{} },
 		Now:   func() time.Time { return time.Unix(hour+3600+7*60, 0) },

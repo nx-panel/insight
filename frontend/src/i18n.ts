@@ -18,7 +18,6 @@ const en = {
     probing: 'Probing',
     alerts: 'Alerts',
     cloud: 'NX network',
-    security: 'Security',
     signOut: 'Sign out',
     language: 'Language',
     menu: 'Menu',
@@ -124,7 +123,7 @@ const en = {
     serves: 'Serves',
     tunnels: 'Tunnels',
     role: { relay: 'relay', origin: 'origin' },
-    endpointNote: 'an endpoint: failed handshakes are not seen',
+    endpointNote: 'a WireGuard endpoint: failed handshakes are not seen',
     fronted: 'behind a domain front',
     tunnelState: { up: 'Linked', down: 'No link', unknown: 'Not known' },
     tunnelHours:
@@ -158,7 +157,6 @@ const en = {
       'Your own AI model reads this panel’s paths once a day for each client country, and again when an alert comes, and says what it sees: which protocol or node is blocked for which network, where to move users, what to rotate. Use any OpenAI-compatible API with your key, or Ollama on your server at no cost. Everything else in Insight works without it.',
     privacy:
       'What is sent: per client network, node number and inbound, counts and ratios of the last 24 hours, and each node’s hosting country and provider. Never a client or node address, never a node’s name. Nothing goes to NX.',
-    settings: 'Model',
     off: 'Off',
     on: 'On',
     presets: 'Fill in for:',
@@ -225,7 +223,7 @@ const en = {
     intro:
       'Share this panel’s path counts, anonymously, with NX, and receive NX’s regional report: which protocols work and which are blocked for each network of your users’ countries, pooled from many independent operators. Off by default; Insight works fully without it.',
     privacy:
-      'What is sent, once an hour: per client network (AS number and its registered name, country and estimated region) and per hosting network of your nodes (AS number, name, country), per protocol shape (protocol, transport, TLS or REALITY, direct or through a CDN): connections accepted, authenticated, cut early, failed by class and failure signature, replayed handshakes, round trip and session time sums, and Insight’s own reading (fine, degraded, outage, node address blocked, tunnel down). Never an address of a client or a node, a node’s name or number, an inbound’s tag, a domain, an SNI, a path, or your panel. Each batch is signed with this install’s key, registered with your panel and through it with NX’s licence service.',
+      'What is sent, once an hour, for the hour just closed: per client network (AS number and its registered name, country and estimated region) and per hosting network of your nodes (AS number, name, country), per protocol shape (protocol, transport, TLS or REALITY, direct or through a CDN) and TCP or UDP: connections accepted, authenticated, cut early, failed by class and failure signature, replayed handshakes, follow-up failures (a failure soon after another network’s success), round-trip and session-time sums with their sample counts, and Insight’s own reading (fine, degraded, outage, node address blocked, tunnel down); with them, Insight’s own version. Never an address of a client or a node, a node’s name or number, an inbound’s tag, a domain, an SNI, a path, or your panel. Each batch is signed with this install’s key, registered with your panel and through it with NX’s licence service.',
     switch: 'Mode B',
     off: 'Off',
     on: 'On',
@@ -233,6 +231,7 @@ const en = {
     key: 'This install’s key',
     registered: 'registered with the panel',
     notRegistered: 'not registered with the panel yet',
+    removing: 'being removed from the panel: retried until the panel takes it',
     waiting: '{n} waiting to be sent',
     failed: '{n} refused by NX',
     lastSent: 'Last batch sent: {at}, {cells} cells',
@@ -442,7 +441,6 @@ const fa: Messages = {
     probing: 'پروب',
     alerts: 'هشدارها',
     cloud: 'شبکه‌ی NX',
-    security: 'امنیت',
     signOut: 'خروج',
     language: 'زبان',
     menu: 'منو',
@@ -546,7 +544,7 @@ const fa: Messages = {
     serves: 'سرویس‌ها',
     tunnels: 'تانل‌ها',
     role: { relay: 'رله', origin: 'مبدأ' },
-    endpointNote: 'اندپوینت: handshake ناموفق دیده نمی‌شود',
+    endpointNote: 'اندپوینت WireGuard: handshake ناموفق دیده نمی‌شود',
     fronted: 'پشت domain front',
     tunnelState: { up: 'لینک دارد', down: 'بدون لینک', unknown: 'نامعلوم' },
     tunnelHours:
@@ -580,7 +578,6 @@ const fa: Messages = {
       'مدل هوش مصنوعی خودتان روزی یک بار برای هر کشور کلاینت، و هر بار که هشداری بیاید، مسیرهای این پنل را می‌خواند و می‌گوید چه می‌بیند: کدام پروتکل یا نود برای کدام شبکه مسدود است، کاربران را به کجا ببرید، چه چیزی را عوض کنید. هر API سازگار با OpenAI با کلید خودتان، یا Ollama روی سرور خودتان بدون هزینه. بقیهٔ Insight بدون آن هم کار می‌کند.',
     privacy:
       'آنچه فرستاده می‌شود: برای هر شبکهٔ کلاینت، شمارهٔ نود و inbound، شمارش‌ها و نسبت‌های ۲۴ ساعت گذشته، و کشور و شرکت میزبان هر نود. هیچ‌وقت آدرس کلاینت یا نود و نام نود فرستاده نمی‌شود. چیزی به NX نمی‌رود.',
-    settings: 'مدل',
     off: 'خاموش',
     on: 'روشن',
     presets: 'پر کردن برای:',
@@ -650,7 +647,7 @@ const fa: Messages = {
     intro:
       'شمارش مسیرهای این پنل را به‌صورت ناشناس با NX به اشتراک بگذارید و گزارش منطقه‌ای NX را بگیرید: کدام پروتکل‌ها برای هر شبکه‌ی کشورهای کاربرانتان کار می‌کنند و کدام مسدودند، از جمع داده‌ی اپراتورهای مستقل زیاد. به‌طور پیش‌فرض خاموش است و Insight بدون آن کامل کار می‌کند.',
     privacy:
-      'آنچه ساعتی یک بار فرستاده می‌شود: برای هر شبکه‌ی کلاینت (شماره‌ی AS و نام ثبت‌شده‌اش، کشور و استان تخمینی) و هر شبکه‌ی میزبان نودهایتان (شماره‌ی AS، نام، کشور)، به تفکیک شکل پروتکل (پروتکل، ترنسپورت، TLS یا REALITY، مستقیم یا از پشت CDN): اتصال‌های پذیرفته، احرازشده، زود قطع‌شده، شکست‌ها به تفکیک نوع و امضا، دست‌دهی‌های تکراری، جمع زمان رفت‌وبرگشت و مدت جلسه، و برداشت خود Insight (سالم، مختل، قطعی شبکه، آدرس نود مسدود، تانل قطع). هرگز آدرس کلاینت یا نود، نام یا شماره‌ی نود، تگ اینباند، دامنه، SNI، مسیر یا پنل شما. هر بسته با کلید این نصب امضا می‌شود که نزد پنل شما و از طریق آن نزد سرویس لایسنس NX ثبت شده است.',
+      'آنچه ساعتی یک بار، برای ساعتی که همین حالا بسته شده، فرستاده می‌شود: برای هر شبکه‌ی کلاینت (شماره‌ی AS و نام ثبت‌شده‌اش، کشور و استان تخمینی) و هر شبکه‌ی میزبان نودهایتان (شماره‌ی AS، نام، کشور)، به تفکیک شکل پروتکل (پروتکل، ترنسپورت، TLS یا REALITY، مستقیم یا از پشت CDN) و TCP یا UDP: اتصال‌های پذیرفته، احرازشده، زود قطع‌شده، شکست‌ها به تفکیک نوع و امضا، دست‌دهی‌های تکراری، شکست‌های پیِ موفقیت (شکستی کمی پس از موفقیت شبکه‌ای دیگر)، جمع زمان رفت‌وبرگشت و مدت جلسه همراه با تعداد نمونه‌هایشان، و برداشت خود Insight (سالم، مختل، قطعی شبکه، آدرس نود مسدود، تانل قطع)؛ همراه آن‌ها نسخه‌ی خود Insight. هرگز آدرس کلاینت یا نود، نام یا شماره‌ی نود، تگ اینباند، دامنه، SNI، مسیر یا پنل شما. هر بسته با کلید این نصب امضا می‌شود که نزد پنل شما و از طریق آن نزد سرویس لایسنس NX ثبت شده است.',
     switch: 'حالت B',
     off: 'خاموش',
     on: 'روشن',
@@ -658,6 +655,7 @@ const fa: Messages = {
     key: 'کلید این نصب',
     registered: 'نزد پنل ثبت شده',
     notRegistered: 'هنوز نزد پنل ثبت نشده',
+    removing: 'در حال حذف از پنل: تا وقتی پنل بپذیرد دوباره تلاش می‌شود',
     waiting: '{n} در انتظار ارسال',
     failed: '{n} را NX نپذیرفت',
     lastSent: 'آخرین بسته‌ی فرستاده‌شده: {at}، {cells} خانه',
@@ -864,7 +862,6 @@ const ru: Messages = {
     probing: 'Зондирование',
     alerts: 'Оповещения',
     cloud: 'Сеть NX',
-    security: 'Безопасность',
     signOut: 'Выйти',
     language: 'Язык',
     menu: 'Меню',
@@ -969,7 +966,7 @@ const ru: Messages = {
     serves: 'Обслуживает',
     tunnels: 'Туннели',
     role: { relay: 'ретранслятор', origin: 'выход' },
-    endpointNote: 'точка подключения: неудачные рукопожатия не видны',
+    endpointNote: 'точка WireGuard: неудачные рукопожатия не видны',
     fronted: 'за доменным фронтом',
     tunnelState: { up: 'Связь есть', down: 'Нет связи', unknown: 'Неизвестно' },
     tunnelHours:
@@ -1003,7 +1000,6 @@ const ru: Messages = {
       'Ваша собственная модель раз в день для каждой страны клиентов, а также после каждого оповещения читает пути этой панели и говорит, что видит: какой протокол или узел заблокирован для какой сети, куда перевести пользователей, что сменить. Подойдёт любой OpenAI-совместимый API с вашим ключом или Ollama на вашем сервере бесплатно. Остальная часть Insight работает и без неё.',
     privacy:
       'Что отправляется: по каждой сети клиентов, номеру узла и inbound — счётчики и доли за последние 24 часа, а также страна и провайдер хостинга каждого узла. Никогда — адреса клиентов или узлов и имена узлов. В NX ничего не уходит.',
-    settings: 'Модель',
     off: 'Выкл.',
     on: 'Вкл.',
     presets: 'Заполнить для:',
@@ -1071,7 +1067,7 @@ const ru: Messages = {
     intro:
       'Анонимно делитесь счётчиками путей этой панели с NX и получайте региональный отчёт NX: какие протоколы работают и какие заблокированы для каждой сети стран ваших пользователей — по данным многих независимых операторов. По умолчанию выключено; Insight полностью работает и без этого.',
     privacy:
-      'Что отправляется раз в час: по каждой клиентской сети (номер AS и её зарегистрированное имя, страна и примерный регион) и по каждой сети хостинга ваших узлов (номер AS, имя, страна), по форме протокола (протокол, транспорт, TLS или REALITY, напрямую или через CDN): принятые, аутентифицированные, рано оборванные соединения, отказы по классу и сигнатуре, повторённые рукопожатия, суммы задержки и длительности сессий, и собственная оценка Insight (норма, деградация, отключение сети, адрес узла заблокирован, туннель упал). Никогда — адрес клиента или узла, имя или номер узла, тег инбаунда, домен, SNI, путь или ваша панель. Каждый пакет подписан ключом этой установки, зарегистрированным в вашей панели и через неё в службе лицензий NX.',
+      'Что отправляется раз в час, за только что закончившийся час: по каждой клиентской сети (номер AS и её зарегистрированное имя, страна и примерный регион) и по каждой сети хостинга ваших узлов (номер AS, имя, страна), по форме протокола (протокол, транспорт, TLS или REALITY, напрямую или через CDN) и по TCP или UDP: принятые, аутентифицированные, рано оборванные соединения, отказы по классу и сигнатуре, повторённые рукопожатия, последующие отказы (отказ вскоре после успеха другой сети), суммы задержки и длительности сессий вместе с числом замеров, и собственная оценка Insight (норма, деградация, отключение сети, адрес узла заблокирован, туннель упал); вместе с ними — версия самого Insight. Никогда — адрес клиента или узла, имя или номер узла, тег инбаунда, домен, SNI, путь или ваша панель. Каждый пакет подписан ключом этой установки, зарегистрированным в вашей панели и через неё в службе лицензий NX.',
     switch: 'Режим B',
     off: 'Выкл',
     on: 'Вкл',
@@ -1079,6 +1075,7 @@ const ru: Messages = {
     key: 'Ключ этой установки',
     registered: 'зарегистрирован в панели',
     notRegistered: 'ещё не зарегистрирован в панели',
+    removing: 'удаляется из панели: попытки повторяются, пока панель не примет',
     waiting: '{n} ждут отправки',
     failed: '{n} отклонены NX',
     lastSent: 'Последний отправленный пакет: {at}, ячеек: {cells}',
@@ -1285,7 +1282,6 @@ const zh: Messages = {
     probing: '探测',
     alerts: '告警',
     cloud: 'NX 网络',
-    security: '安全',
     signOut: '退出',
     language: '语言',
     menu: '菜单',
@@ -1385,7 +1381,7 @@ const zh: Messages = {
     serves: '提供',
     tunnels: '隧道',
     role: { relay: '中继', origin: '出口' },
-    endpointNote: '端点：看不到失败的握手',
+    endpointNote: 'WireGuard 端点：看不到失败的握手',
     fronted: '位于域前置之后',
     tunnelState: { up: '已连通', down: '无链路', unknown: '未知' },
     tunnelHours:
@@ -1419,7 +1415,6 @@ const zh: Messages = {
       '您自己的 AI 模型每天为每个客户端国家读取一次本面板的路径，每次告警后也会再读一次，并说明它看到的情况：哪个协议或节点对哪个网络被封锁、把用户迁到哪里、应该更换什么。可使用任何兼容 OpenAI 的 API 和您的密钥，或在您的服务器上免费运行 Ollama。Insight 的其余功能不依赖它。',
     privacy:
       '发送的内容：按客户端网络、节点编号和 inbound 统计的过去 24 小时的计数和比例，以及每个节点的托管国家和服务商。绝不发送客户端或节点地址，也不发送节点名称。不会向 NX 发送任何内容。',
-    settings: '模型',
     off: '关闭',
     on: '开启',
     presets: '快速填写：',
@@ -1482,7 +1477,7 @@ const zh: Messages = {
     intro:
       '以匿名方式与 NX 共享此面板的路径计数，并获取 NX 的地区报告：在您用户所在国家的每个网络中，哪些协议可用、哪些被封锁——数据汇集自众多独立运营者。默认关闭；没有它 Insight 也能完整运行。',
     privacy:
-      '每小时发送一次的内容：按客户端网络（AS 号及其注册名称、国家和估计地区）、按您节点的托管网络（AS 号、名称、国家）、按协议形态（协议、传输、TLS 或 REALITY、直连或经 CDN）统计：已接受、已认证、过早断开的连接，按类别和失败特征统计的失败，被重放的握手，往返时间与会话时长之和，以及 Insight 自己的判断（正常、降级、网络中断、节点地址被封、隧道断开）。绝不包含客户端或节点地址、节点名称或编号、入站标签、域名、SNI、路径或您的面板。每批数据都用本安装的密钥签名，该密钥在您的面板登记，并经面板登记到 NX 的许可证服务。',
+      '每小时发送一次、针对刚结束的那一小时的内容：按客户端网络（AS 号及其注册名称、国家和估计地区）、按您节点的托管网络（AS 号、名称、国家）、按协议形态（协议、传输、TLS 或 REALITY、直连或经 CDN）以及 TCP 或 UDP 统计：已接受、已认证、过早断开的连接，按类别和失败特征统计的失败，被重放的握手，后续失败（另一网络成功后不久的失败），往返时间与会话时长之和及其样本数，以及 Insight 自己的判断（正常、降级、网络中断、节点地址被封、隧道断开）；连同 Insight 自身的版本。绝不包含客户端或节点地址、节点名称或编号、入站标签、域名、SNI、路径或您的面板。每批数据都用本安装的密钥签名，该密钥在您的面板登记，并经面板登记到 NX 的许可证服务。',
     switch: '模式 B',
     off: '关闭',
     on: '开启',
@@ -1490,6 +1485,7 @@ const zh: Messages = {
     key: '本安装的密钥',
     registered: '已在面板登记',
     notRegistered: '尚未在面板登记',
+    removing: '正在从面板移除：会一直重试，直到面板接受',
     waiting: '{n} 批待发送',
     failed: '{n} 批被 NX 拒绝',
     lastSent: '最近发送的批次：{at}，{cells} 个单元',

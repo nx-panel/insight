@@ -10,6 +10,10 @@
 // that is cut off — an Iranian mobile shutdown, a Russian whitelist mode:
 // one asn.outage alert, no per-path alerts for it, and the
 // subscription hints for it are left as they were.
+//
+// Every evaluation that judged the window also hands what it judged, on
+// this run's evidence only, to OnRead (Reading): Mode B records it for the
+// hour.
 package detect
 
 import (
@@ -173,6 +177,30 @@ type pathState struct {
 	// it is not folded into the normal, or a block would become the normal
 	// and "recover" by itself after a couple of hours.
 	lastBad time.Time
+	// fresh is whether a window judged since the feed last (re)started
+	// read it bad: a state loaded from the last run, or left from before a
+	// break in the feed, is not, until a window reads it bad again
+	// (Reading). A reload after a failed store keeps it.
+	fresh bool
+}
+
+// Reading is what one evaluation that judged the window found, on the
+// paths it judged and on this run's evidence only: a path the last run
+// left degraded, or one degraded before a break in the feed, is in
+// Degraded once a window of this feed has read it bad, and an outage needs
+// such paths to start and to stay, as the detector's own does.
+type Reading struct {
+	// At is the evaluation's moment.
+	At time.Time
+	// Judged are the paths judged at it: with a normal busy enough to
+	// judge, on a node counting and back for a window, whatever traffic the
+	// window holds. A relay a broken tunnel explains (TunnelDown, and a
+	// window after) is left out, paths and all.
+	Judged map[Key]bool
+	// Degraded are the judged paths degraded at it.
+	Degraded map[Key]bool
+	// Outages are the client ASNs in an outage at it.
+	Outages map[uint32]bool
 }
 
 // Detector holds the window and the states.
@@ -189,6 +217,11 @@ type Detector struct {
 	// path inside an outage; one still down once the tunnel is back is
 	// said then.
 	TunnelDown func() map[uint]bool
+	// OnRead, when set, is handed what each evaluation that judged the
+	// window found (Reading), on Evaluate's goroutine and context, outside
+	// mu, once the states are stored: an evaluation whose store fails hands
+	// nothing over. It holds the next evaluation back while it runs.
+	OnRead func(context.Context, Reading)
 	// Started is since when the window has been fed without a break: the
 	// first poll that worked after the start, or after a poll that did not
 	// or a gap in the panel's buffer (Covered, Lost, Gapped). The window covers no more than the time since, and
@@ -223,6 +256,9 @@ type Detector struct {
 	start    time.Time // the newest bucket's start
 	states   map[Key]*pathState
 	outages  map[uint32]bool
+	// readOutages are the outages the last Reading held, for the half that
+	// keeps one there; a break in the feed clears them (stale).
+	readOutages map[uint32]bool
 	// baselined is the last hour folded into the normals.
 	baselined int64
 	// tunnelSeen is when each node was last held for a broken tunnel
@@ -317,6 +353,16 @@ func (d *Detector) Lost() {
 	}
 	d.Started = time.Time{}
 	d.buckets = [Buckets]map[Key]*model.PathCounters{}
+	d.stale()
+}
+
+// stale marks every state as not read in the current feed. The caller
+// holds mu.
+func (d *Detector) stale() {
+	for _, st := range d.states {
+		st.fresh = false
+	}
+	d.readOutages = nil
 }
 
 // Gapped says the panel dropped samples before they were read: what the
@@ -327,6 +373,7 @@ func (d *Detector) Gapped() {
 	now := d.now()
 	d.Started = time.Time{}
 	d.buckets = [Buckets]map[Key]*model.PathCounters{}
+	d.stale()
 	d.markBlind(now.Add(-panelKeeps), now)
 }
 
@@ -445,6 +492,7 @@ func (d *Detector) load(ctx context.Context, now time.Time) error {
 	if d.loaded {
 		return nil
 	}
+	prev := d.states // a reload after a failed store keeps what was read
 	d.states, d.outages, d.saved = map[Key]*pathState{}, map[uint32]bool{}, map[Key]PathState{}
 	for _, r := range rows {
 		k := Key{r.NodeID, r.Inbound, r.ASN, r.Network}
@@ -455,7 +503,7 @@ func (d *Detector) load(ctx context.Context, now time.Time) error {
 		}
 		// It was down when Insight stopped: it stays down until two good
 		// evaluations say otherwise, and the hours since are not its normal.
-		d.states[k] = &pathState{degraded: true, alerted: r.Alerted, reason: r.Reason, since: r.Since, lastBad: now}
+		d.states[k] = &pathState{degraded: true, alerted: r.Alerted, reason: r.Reason, since: r.Since, lastBad: now, fresh: prev[k] != nil && prev[k].fresh}
 	}
 	if !d.seenLoaded {
 		// From the last poll that worked before the stop to the first one
@@ -481,7 +529,8 @@ func (d *Detector) load(ctx context.Context, now time.Time) error {
 const stateSeen = "detect_seen"
 
 // Evaluate folds finished hours into the normals, judges every path with a
-// normal against the window, and raises the alerts the changes make.
+// normal against the window, raises the alerts the changes make and, when
+// it judged, hands what it found to OnRead.
 func (d *Detector) Evaluate(ctx context.Context) error {
 	now := d.now()
 	tunnelDown := map[uint]bool{}
@@ -573,7 +622,12 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 	type asnView struct {
 		paths, degraded int
 		nodes           map[uint]bool
+		// judged, fresh and judgedNodes are the Reading's: the paths judged
+		// now, those of them degraded on this feed's evidence, their nodes.
+		judged, fresh int
+		judgedNodes   map[uint]bool
 	}
+	judged := map[Key]bool{}
 	byASN := map[uint32]*asnView{}
 	keys := make([]Key, 0, len(normals))
 	for k := range normals {
@@ -617,7 +671,7 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 		view := func() *asnView {
 			v := byASN[k.ASN]
 			if v == nil {
-				v = &asnView{nodes: map[uint]bool{}}
+				v = &asnView{nodes: map[uint]bool{}, judgedNodes: map[uint]bool{}}
 				byASN[k.ASN] = v
 			}
 			return v
@@ -643,7 +697,7 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 			d.states[k] = st
 		}
 		if bad {
-			st.bad, st.good = st.bad+1, 0
+			st.bad, st.good, st.fresh = st.bad+1, 0, true
 			if !st.degraded && st.bad >= confirm {
 				st.degraded, st.reason, st.since, st.lastBad = true, reason, at, now
 				changes = append(changes, change{k, true, reason, detail})
@@ -663,6 +717,15 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 		v.nodes[k.Node] = true
 		if st.degraded {
 			v.degraded++
+		}
+		if _, held := d.tunnelSeen[k.Node]; held {
+			continue // back for less than a window: the cut is still in it
+		}
+		judged[k] = true
+		v.judged++
+		v.judgedNodes[k.Node] = true
+		if st.degraded && st.fresh {
+			v.fresh++
 		}
 	}
 	asns := make([]uint32, 0, len(byASN))
@@ -731,6 +794,27 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 			Reason: st.reason, At: at, Detail: detailJSON(map[string]float64{"normalAuthedPerHour": normals[k].MeanAuthed}),
 		})
 	}
+	// What this evaluation found, on the paths it judged and this feed's
+	// evidence. An outage there follows the detector's rules on those
+	// paths alone: every one degraded on two nodes or more to start, half
+	// of them to stay in one the last Reading held.
+	reading := Reading{At: now, Judged: judged, Degraded: map[Key]bool{}, Outages: map[uint32]bool{}}
+	for k := range judged {
+		if st := d.states[k]; st != nil && st.degraded && st.fresh {
+			reading.Degraded[k] = true
+		}
+	}
+	for asn := range d.outages {
+		v := byASN[asn]
+		if v == nil || v.judged == 0 {
+			continue
+		}
+		start := len(v.judgedNodes) >= 2 && v.fresh == v.judged
+		stay := d.readOutages[asn] && v.fresh*2 >= v.judged
+		if start || stay {
+			reading.Outages[asn] = true
+		}
+	}
 	// What the database must hold now, against what it holds.
 	want := map[Key]PathState{}
 	for k, st := range d.states {
@@ -762,6 +846,7 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 	}
 	d.mu.Unlock()
 	if len(alerts) == 0 && len(put) == 0 && len(drop) == 0 {
+		d.handOver(ctx, reading)
 		return nil
 	}
 	// The states and their alerts are written together: an alert that could
@@ -797,7 +882,18 @@ func (d *Detector) Evaluate(ctx context.Context) error {
 			d.Send(ctx, alerts[i])
 		}
 	}
+	d.handOver(ctx, reading)
 	return nil
+}
+
+// handOver keeps r's outages for the next Reading and gives r to OnRead.
+func (d *Detector) handOver(ctx context.Context, r Reading) {
+	d.mu.Lock()
+	d.readOutages = maps.Clone(r.Outages)
+	d.mu.Unlock()
+	if d.OnRead != nil {
+		d.OnRead(ctx, r)
+	}
 }
 
 // judge compares a window with a path's normal.

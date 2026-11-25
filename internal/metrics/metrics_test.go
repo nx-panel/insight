@@ -1,6 +1,8 @@
 package metrics_test
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 	"github.com/nx-panel/insight/internal/config"
 	"github.com/nx-panel/insight/internal/db"
 	"github.com/nx-panel/insight/internal/detect"
+	"github.com/nx-panel/insight/internal/ingest"
 	"github.com/nx-panel/insight/internal/metrics"
 	"github.com/nx-panel/insight/internal/model"
 )
@@ -74,7 +77,7 @@ func TestMetricsAreBounded(t *testing.T) {
 		}
 		return ""
 	}, Now: func() time.Time { return now }}
-	if err := metrics.Write(&b, src); err != nil {
+	if err := metrics.Write(t.Context(), &b, src); err != nil {
 		t.Fatal(err)
 	}
 	text := b.String()
@@ -118,5 +121,55 @@ func TestMetricsAreBounded(t *testing.T) {
 	}
 	if regexp.MustCompile(`\d+\.\d+\.\d+\.\d+|/24|/48`).MatchString(text) {
 		t.Fatal("an address or a prefix in the metrics")
+	}
+}
+
+// shapesPanel answers a poll with no samples and the nodes' shapes.
+type shapesPanel []ingest.NodeState
+
+func (p shapesPanel) Get(_ context.Context, _ string, out any) error {
+	raw, err := json.Marshal(map[string]any{"active": true, "nodes": p})
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(raw, out)
+}
+
+// TestOnlyAWireGuardPathIsLabelledEndpoint: a WireGuard endpoint counts
+// only handshakes and is kind="endpoint"; an OpenVPN or OpenConnect
+// endpoint counts like an inbound and is kind="inbound", so the
+// dashboard's success ratio over the inbounds keeps it.
+func TestOnlyAWireGuardPathIsLabelledEndpoint(t *testing.T) {
+	gdb, err := db.Open(config.Config{Driver: config.DriverSQLite, DSN: filepath.Join(t.TempDir(), "i.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)
+	in := &ingest.Ingest{DB: gdb, Now: func() time.Time { return now }, Panel: func() ingest.Getter {
+		return shapesPanel{{ID: 1, State: ingest.StateNodeOn, Inbounds: []ingest.Shape{
+			{Tag: "wg", Kind: ingest.KindEndpoint, Type: "wireguard"},
+			{Tag: "ovpn", Kind: ingest.KindEndpoint, Type: "openvpn-server"},
+			{Tag: "ocserv", Kind: ingest.KindEndpoint, Type: "openconnect-server"},
+		}}}
+	}}
+	if err := in.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	d := &detect.Detector{DB: gdb, Now: func() time.Time { return now }}
+	d.Observe(detect.Key{Node: 1, Inbound: "wg", ASN: 64600, Network: "udp"}, model.PathCounters{Authed: 10})
+	d.Observe(detect.Key{Node: 1, Inbound: "ovpn", ASN: 64600, Network: "tcp"}, model.PathCounters{Accepted: 100, Authed: 10, FailedAuth: 90})
+	d.Observe(detect.Key{Node: 1, Inbound: "ocserv", ASN: 64600, Network: "tcp"}, model.PathCounters{Accepted: 20, Authed: 20})
+	var b strings.Builder
+	if err := metrics.Write(t.Context(), &b, metrics.Sources{DB: gdb, Detect: d, Ingest: in, Now: func() time.Time { return now }}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`insight_path_authed_15m{node="#1",node_id="1",inbound="wg",kind="endpoint",`,
+		`insight_path_failed_15m{node="#1",node_id="1",inbound="ovpn",kind="inbound",`,
+		`insight_path_accepted_15m{node="#1",node_id="1",inbound="ocserv",kind="inbound",`,
+	} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("missing %s in\n%s", want, b.String())
+		}
 	}
 }

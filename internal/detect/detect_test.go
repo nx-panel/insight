@@ -1,6 +1,8 @@
 package detect_test
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -213,8 +215,7 @@ func TestFinishedHoursBuildTheNormal(t *testing.T) {
 
 // TestARestartIsNotADrop: just after Insight starts, the window holds a few
 // minutes, not fifteen; the rate is read over what it holds, so a path at its
-// normal rate is not taken for one whose traffic dropped (found in the
-// two-ASN walk, 2026-11-22).
+// normal rate is not taken for one whose traffic dropped.
 func TestARestartIsNotADrop(t *testing.T) {
 	gdb := openDB(t)
 	c := &clock{time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)}
@@ -253,7 +254,7 @@ func run(t *testing.T, d *detect.Detector, c *clock, n int, feed func()) {
 // TestABlockThatLastsStaysABlock: the hours a path is down in are not folded
 // into its normal. Folded, the mean sank toward the blocked value and the
 // variance grew until the block read as normal: path.recovered two hours and
-// twenty minutes into a block still going on (QA, 2026-11-22).
+// twenty minutes into a block still going on.
 func TestABlockThatLastsStaysABlock(t *testing.T) {
 	gdb := openDB(t)
 	c := &clock{time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)}
@@ -670,5 +671,223 @@ func TestABrokenTunnelSpeaksForItsRelay(t *testing.T) {
 	eval(healed)
 	if got := kinds(t, gdb); len(got) != 1 {
 		t.Fatalf("the paths that came back with the tunnel said something: %v", got)
+	}
+}
+
+// stored writes path states as a stopped run leaves them.
+func stored(t *testing.T, gdb *gorm.DB, rows ...detect.PathState) {
+	t.Helper()
+	for _, r := range rows {
+		if err := gdb.Create(&r).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// readings collects what d hands over.
+func readings(d *detect.Detector) *[]detect.Reading {
+	var out []detect.Reading
+	d.OnRead = func(_ context.Context, r detect.Reading) { out = append(out, r) }
+	return &out
+}
+
+func lastReading(t *testing.T, rs *[]detect.Reading) detect.Reading {
+	t.Helper()
+	if len(*rs) == 0 {
+		t.Fatal("nothing handed over")
+	}
+	return (*rs)[len(*rs)-1]
+}
+
+// TestAReadingCarriesOnlyThisFeedsEvidence: an evaluation that judged hands
+// over what it found; a path or an outage the last run stored, or one from
+// before a break in the feed, is not in it until a window reads it bad
+// again, though the detector keeps it; nothing is handed over unjudged; a
+// path with a normal is judged with no traffic at all.
+func TestAReadingCarriesOnlyThisFeedsEvidence(t *testing.T) {
+	gdb := openDB(t)
+	c := &clock{time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)}
+	k := detect.Key{Node: 1, Inbound: "vless", ASN: 44244, Network: "tcp"}
+	other := detect.Key{Node: 2, Inbound: "vless", ASN: 44244, Network: "tcp"}
+	normal(gdb, t, k)
+	normal(gdb, t, other)
+	stored(t, gdb,
+		detect.PathState{NodeID: 1, Inbound: "vless", ASN: 44244, Network: "tcp", Alerted: true, Reason: "failures", Since: 1},
+		detect.PathState{NodeID: 2, Inbound: "vless", ASN: 44244, Network: "tcp", Alerted: true, Reason: "failures", Since: 1},
+		detect.PathState{ASN: 44244, Since: 1},
+	)
+	d := &detect.Detector{DB: gdb, Now: c.now}
+	rs := readings(d)
+	// Not fed, then fed for under a bucket: nothing judged, nothing handed.
+	run(t, d, c, 1, nil)
+	d.Covered(nil)
+	c.step(detect.BucketEvery - time.Second)
+	if err := d.Evaluate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(*rs) != 0 {
+		t.Fatalf("handed over %d readings unjudged", len(*rs))
+	}
+	healthy := func() { traffic(d, k, 11, 10, 0); traffic(d, other, 11, 10, 0) }
+	bad := func() { traffic(d, k, 40, 1, 38); traffic(d, other, 40, 1, 38) }
+	c.step(time.Second)
+	healthy()
+	if err := d.Evaluate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	last := lastReading(t, rs)
+	if !d.Degraded()[k] || !d.Outages()[44244] {
+		t.Fatal("one good window cleared what the last run stored")
+	}
+	if len(last.Degraded) != 0 || len(last.Outages) != 0 || !last.Judged[k] || !last.Judged[other] || !last.At.Equal(c.t) {
+		t.Fatalf("reading after the restart = %+v", last)
+	}
+	run(t, d, c, 1, bad)
+	if last = lastReading(t, rs); !last.Degraded[k] || !last.Degraded[other] || !last.Outages[44244] {
+		t.Fatalf("read bad again = %+v", last)
+	}
+	// A break in the feed, or a gap in the panel's buffer: what was read
+	// before it is not this feed's.
+	for _, brk := range []func(){d.Lost, d.Gapped} {
+		run(t, d, c, 1, bad)
+		brk()
+		d.Covered(nil)
+		run(t, d, c, 1, healthy)
+		if last = lastReading(t, rs); len(last.Degraded) != 0 || len(last.Outages) != 0 {
+			t.Fatalf("reading after a break = %+v", last)
+		}
+	}
+	// No traffic at all, a window of it: still judged, and bad.
+	run(t, d, c, detect.Buckets+1, nil)
+	if last = lastReading(t, rs); !last.Judged[k] || !last.Degraded[k] {
+		t.Fatalf("reading of a silent path = %+v", last)
+	}
+}
+
+// TestAReadingsOutageNeedsItsOwnStart: an outage the detector holds from
+// the last run is in a reading only once this feed reads every path of it
+// bad on two nodes; one bad and one good is not one.
+func TestAReadingsOutageNeedsItsOwnStart(t *testing.T) {
+	gdb := openDB(t)
+	c := &clock{time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)}
+	k := detect.Key{Node: 1, Inbound: "vless", ASN: 44244, Network: "tcp"}
+	other := detect.Key{Node: 2, Inbound: "vless", ASN: 44244, Network: "tcp"}
+	normal(gdb, t, k)
+	normal(gdb, t, other)
+	stored(t, gdb,
+		detect.PathState{NodeID: 1, Inbound: "vless", ASN: 44244, Network: "tcp", Since: 1},
+		detect.PathState{NodeID: 2, Inbound: "vless", ASN: 44244, Network: "tcp", Since: 1},
+		detect.PathState{ASN: 44244, Since: 1},
+	)
+	d := &detect.Detector{DB: gdb, Now: c.now, Started: c.t}
+	rs := readings(d)
+	run(t, d, c, 1, func() { traffic(d, k, 40, 1, 38); traffic(d, other, 11, 10, 0) })
+	last := lastReading(t, rs)
+	if !d.Outages()[44244] || !last.Degraded[k] || last.Degraded[other] || len(last.Outages) != 0 {
+		t.Fatalf("detector outage %v, reading %+v", d.Outages(), last)
+	}
+}
+
+// TestAReadingsOutageStaysAtHalf: once a reading holds an outage it stays
+// while half its judged paths read bad, as the detector's own does.
+func TestAReadingsOutageStaysAtHalf(t *testing.T) {
+	gdb := openDB(t)
+	c := &clock{time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)}
+	keys := []detect.Key{
+		{Node: 1, Inbound: "a", ASN: 44244, Network: "tcp"},
+		{Node: 1, Inbound: "b", ASN: 44244, Network: "tcp"},
+		{Node: 2, Inbound: "a", ASN: 44244, Network: "tcp"},
+		{Node: 2, Inbound: "b", ASN: 44244, Network: "tcp"},
+	}
+	for _, k := range keys {
+		normal(gdb, t, k)
+	}
+	d := &detect.Detector{DB: gdb, Now: c.now, Started: c.t}
+	rs := readings(d)
+	feed := func(good int) func() {
+		return func() {
+			for i, k := range keys {
+				if i < good {
+					traffic(d, k, 11, 10, 0)
+				} else {
+					traffic(d, k, 40, 1, 38)
+				}
+			}
+		}
+	}
+	run(t, d, c, 2, feed(0))
+	if last := lastReading(t, rs); !last.Outages[44244] {
+		t.Fatalf("whole ASN bad: %+v", last)
+	}
+	run(t, d, c, detect.Buckets+2, feed(2))
+	last := lastReading(t, rs)
+	if !d.Outages()[44244] || !last.Outages[44244] || len(last.Degraded) != 2 {
+		t.Fatalf("half back: detector %v, reading %+v", d.Outages(), last)
+	}
+}
+
+// TestAReadingLeavesOutWhatWasNotJudged: a path too quiet to judge, or on a
+// relay a broken tunnel explains (and for a window after), is not in a
+// reading, whatever its state.
+func TestAReadingLeavesOutWhatWasNotJudged(t *testing.T) {
+	gdb := openDB(t)
+	c := &clock{time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)}
+	quiet := detect.Key{Node: 1, Inbound: "a", ASN: 44244, Network: "tcp"}
+	relay := detect.Key{Node: 2, Inbound: "a", ASN: 44244, Network: "tcp"}
+	if err := gdb.Create(&detect.Baseline{NodeID: 1, Inbound: "a", ASN: 44244, Network: "tcp", Slot: detect.RecentSlot, N: 24, MeanAuthed: 4, VarAuthed: 4}).Error; err != nil {
+		t.Fatal(err)
+	}
+	normal(gdb, t, relay)
+	stored(t, gdb, detect.PathState{NodeID: 1, Inbound: "a", ASN: 44244, Network: "tcp", Since: 1})
+	cut := true
+	d := &detect.Detector{DB: gdb, Now: c.now, Started: c.t, TunnelDown: func() map[uint]bool {
+		if cut {
+			return map[uint]bool{2: true}
+		}
+		return nil
+	}}
+	rs := readings(d)
+	run(t, d, c, 2, func() { traffic(d, relay, 40, 1, 38) })
+	if last := lastReading(t, rs); len(last.Judged) != 0 || len(last.Degraded) != 0 {
+		t.Fatalf("tunnel down: %+v", last)
+	}
+	cut = false
+	run(t, d, c, detect.Buckets-1, func() { traffic(d, relay, 40, 1, 38) })
+	if last := lastReading(t, rs); len(last.Judged) != 0 {
+		t.Fatalf("tunnel back under a window: %+v", last)
+	}
+	run(t, d, c, 2, func() { traffic(d, relay, 40, 1, 38) })
+	if last := lastReading(t, rs); !last.Judged[relay] || last.Judged[quiet] || !last.Degraded[relay] || len(last.Degraded) != 1 {
+		t.Fatalf("tunnel back a window: %+v", last)
+	}
+}
+
+// TestAFailedStoreHandsNothingOver: an evaluation whose states and alerts
+// could not be stored hands no reading over.
+func TestAFailedStoreHandsNothingOver(t *testing.T) {
+	gdb := openDB(t)
+	c := &clock{time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)}
+	k := detect.Key{Node: 1, Inbound: "vless", ASN: 44244, Network: "tcp"}
+	normal(gdb, t, k)
+	d := &detect.Detector{DB: gdb, Now: c.now, Started: c.t}
+	rs := readings(d)
+	run(t, d, c, 1, func() { traffic(d, k, 40, 1, 38) })
+	n := len(*rs)
+	refuse := errors.New("refused")
+	if err := gdb.Callback().Create().Before("gorm:create").Register("refuse_alerts", func(tx *gorm.DB) {
+		if tx.Statement.Table == "alerts" {
+			_ = tx.AddError(refuse)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = gdb.Callback().Create().Remove("refuse_alerts") })
+	traffic(d, k, 40, 1, 38)
+	c.step(detect.BucketEvery)
+	if err := d.Evaluate(t.Context()); !errors.Is(err, refuse) {
+		t.Fatalf("the store answered %v", err)
+	}
+	if len(*rs) != n {
+		t.Fatalf("handed over %d readings after a failed store", len(*rs)-n)
 	}
 }

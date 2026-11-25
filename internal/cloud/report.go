@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-// Report is NX's regional report as published (the cloud's src/reports.ts),
-// named by the time it was extracted.
+// Report is NX's regional report as the cloud publishes it, named by the
+// time it was extracted.
 type Report struct {
 	V           int             `json:"v"`
 	ExtractedAt int64           `json:"extracted_at"`
@@ -91,9 +91,9 @@ func (c *Cloud) Held(ctx context.Context) Held {
 	return Held{Report: r, CheckedAt: s.CheckedAt, Latest: s.Latest, Error: c.state(ctx, stateReportErr)}
 }
 
-// CheckReport asks the cloud for a report newer than the one held — the
-// owner's rule: Insight sends the extraction time of its last report; the
-// cloud sends a newer one or the signal that there is none. Without force,
+// CheckReport asks the cloud for a report newer than the one held: Insight
+// sends the extraction time of its last report; the cloud sends a newer one
+// or the signal that there is none. Without force,
 // a check within ReportGap of the last is skipped (the admin opening the
 // page again).
 func (c *Cloud) CheckReport(ctx context.Context, force bool) error {
@@ -164,43 +164,62 @@ func (c *Cloud) checkReport(ctx context.Context) error {
 
 // Status is Mode B as the admin web shows it.
 type Status struct {
-	On          bool     `json:"on"`
-	URL         string   `json:"url"`
-	Fingerprint string   `json:"fingerprint"`
-	Registered  bool     `json:"registered"`
-	Error       string   `json:"error,omitempty"`
-	Pending     int64    `json:"pending"`
-	Failed      int64    `json:"failed"`
-	LastSent    *Outbox  `json:"lastSent"`
-	Recent      []Outbox `json:"recent"`
+	On          bool   `json:"on"`
+	URL         string `json:"url"`
+	Fingerprint string `json:"fingerprint"`
+	Registered  bool   `json:"registered"`
+	// Removing is a key the panel may still hold while Mode B is off: the
+	// Delete is retried each Tick until the panel takes it.
+	Removing bool      `json:"removing"`
+	Error    string    `json:"error,omitempty"`
+	Pending  int64     `json:"pending"`
+	Failed   int64     `json:"failed"`
+	LastSent *Outbox   `json:"lastSent"`
+	Recent   []Batched `json:"recent"`
+}
+
+// Batched is one outbox row as the admin web shows it.
+type Batched struct {
+	Outbox
+	// Refused is a batch the cloud will never take, kept unsent.
+	Refused bool `json:"refused"`
 }
 
 // Status reads Mode B's state.
 func (c *Cloud) Status(ctx context.Context) (Status, error) {
 	st := Status{On: c.On(ctx), URL: c.url(), Error: c.state(ctx, stateError)}
+	st.Removing = !st.On && c.state(ctx, stateRegistered) != ""
 	if s := c.state(ctx, stateKey); s != "" {
-		if k, err := c.key(ctx); err == nil {
+		k, err := c.key(ctx)
+		if err != nil {
+			st.Error = err.Error()
+		} else {
 			pub := publicB64(k)
 			st.Fingerprint = Fingerprint(pub)
 			st.Registered = c.state(ctx, stateRegistered) == pub
 		}
 	}
 	tx := c.DB.WithContext(ctx)
-	if err := tx.Model(&Outbox{}).Where("sent_at = 0 AND next_at < ?", int64(1)<<62).Count(&st.Pending).Error; err != nil {
+	if err := tx.Model(&Outbox{}).Where("sent_at = 0 AND next_at < ?", neverRetry).Count(&st.Pending).Error; err != nil {
 		return st, err
 	}
-	if err := tx.Model(&Outbox{}).Where("sent_at = 0 AND next_at >= ?", int64(1)<<62).Count(&st.Failed).Error; err != nil {
+	if err := tx.Model(&Outbox{}).Where("sent_at = 0 AND next_at >= ?", neverRetry).Count(&st.Failed).Error; err != nil {
 		return st, err
 	}
 	var last []Outbox
-	if err := tx.Where("sent_at > 0").Order("hour DESC").Limit(1).Find(&last).Error; err != nil {
+	if err := tx.Omit("body").Where("sent_at > 0").Order("hour DESC").Limit(1).Find(&last).Error; err != nil {
 		return st, err
 	}
 	if len(last) == 1 {
 		st.LastSent = &last[0]
 	}
-	if err := tx.Order("hour DESC").Limit(48).Find(&st.Recent).Error; err != nil {
+	var recent []Outbox
+	if err := tx.Omit("body").Order("hour DESC").Limit(48).Find(&recent).Error; err != nil {
 		return st, err
+	}
+	st.Recent = make([]Batched, 0, len(recent))
+	for _, o := range recent {
+		st.Recent = append(st.Recent, Batched{Outbox: o, Refused: o.SentAt == 0 && o.NextAt >= neverRetry})
 	}
 	return st, nil
 }

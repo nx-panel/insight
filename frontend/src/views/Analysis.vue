@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRoute, useRouter } from 'vue-router'
 import Button from 'primevue/button'
 import Message from 'primevue/message'
 import Tabs from 'primevue/tabs'
@@ -19,7 +20,8 @@ import {
   type CloudState,
   type NodeInfo,
 } from '../api'
-import { asnLabel, asnShort, countryName, num, when } from '../format'
+import { asnShort, countryName, num, when } from '../format'
+import NetName from '../components/NetName.vue'
 
 // The results of the two readings: the admin's own model (Mode A, set up on
 // the settings page) and NX's pooled report (Mode B, switched on the NX
@@ -28,7 +30,15 @@ import { asnLabel, asnShort, countryName, num, when } from '../format'
 
 const { t } = useI18n()
 const toast = useToast()
-const tab = ref<'insight' | 'nx'>('insight')
+const route = useRoute()
+const router = useRouter()
+// One page with a tab each, on a flat route (?tab=), as the settings page.
+const tabs = ['insight', 'nx'] as const
+type TabName = (typeof tabs)[number]
+const tab = ref<TabName>(
+  tabs.includes(route.query.tab as TabName) ? (route.query.tab as TabName) : 'insight',
+)
+watch(tab, (v) => void router.replace({ query: { ...route.query, tab: v } }))
 
 const settings = ref<AISettings | null>(null)
 const reports = ref<AIReport[]>([])
@@ -230,13 +240,7 @@ function nxSentence(f: CloudFinding) {
                         :value="t('analysis.severity.' + f.severity)"
                       />
                       <span>{{ sentence(f) }}</span>
-                      <i
-                        v-if="f.asn"
-                        v-tooltip.top.both="asnLabel(f.asn, orgOf(f.asn))"
-                        class="pi pi-info-circle info"
-                        tabindex="0"
-                        :aria-label="asnLabel(f.asn, orgOf(f.asn))"
-                      />
+                      <NetName v-if="f.asn" :asn="f.asn" :org="orgOf(f.asn)" icon-only />
                       <span class="muted">{{
                         t('analysis.confidence', { p: num(100 * f.confidence) })
                       }}</span>
@@ -296,21 +300,17 @@ function nxSentence(f: CloudFinding) {
                       })
                     }}
                   </h2>
-                  <p v-if="!c.findings.length" class="muted">{{ t('cloud.noFinding') }}</p>
+                  <p v-if="!(c.findings ?? []).length" class="muted">
+                    {{ t('cloud.noFinding') }}
+                  </p>
                   <ul v-else class="findings">
-                    <li v-for="(f, i) in c.findings" :key="i">
+                    <li v-for="(f, i) in c.findings ?? []" :key="i">
                       <Tag
                         :severity="severity(f.severity)"
                         :value="t('analysis.severity.' + f.severity)"
                       />
                       <span>{{ nxSentence(f) }}</span>
-                      <i
-                        v-if="f.asn"
-                        v-tooltip.top.both="asnLabel(f.asn, f.org)"
-                        class="pi pi-info-circle info"
-                        tabindex="0"
-                        :aria-label="asnLabel(f.asn, f.org)"
-                      />
+                      <NetName v-if="f.asn" :asn="f.asn" :org="f.org" icon-only />
                       <span class="muted">{{
                         t('analysis.confidence', { p: num(100 * f.confidence) })
                       }}</span>
@@ -360,11 +360,6 @@ h2 {
 }
 .small {
   font-size: 0.85rem;
-}
-.info {
-  font-size: 0.8rem;
-  color: var(--insight-muted);
-  cursor: help;
 }
 :deep(.p-tabpanels) {
   padding-inline: 0;

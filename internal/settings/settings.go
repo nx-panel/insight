@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -80,8 +81,14 @@ func (v *Values) Check() error {
 			return ErrProxy
 		}
 	}
-	if v.TelegramAPI != "" && !strings.HasPrefix(v.TelegramAPI, "https://") && !strings.HasPrefix(v.TelegramAPI, "http://") {
-		return ErrAPI
+	if v.TelegramAPI != "" {
+		// The sender appends /bot<token>/…: a query, a fragment or a
+		// user's name and password would not survive it.
+		u, err := url.Parse(v.TelegramAPI)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" ||
+			u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+			return ErrAPI
+		}
 	}
 	return nil
 }
@@ -104,11 +111,8 @@ func Load(ctx context.Context, gdb *gorm.DB, def Values) (v Values, saved bool, 
 	return v, true, nil
 }
 
-// Save writes v after checking it.
-func Save(ctx context.Context, gdb *gorm.DB, v Values) error {
-	if err := v.Check(); err != nil {
-		return err
-	}
+// save writes v as it is.
+func save(ctx context.Context, gdb *gorm.DB, v Values) error {
 	raw, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -121,16 +125,25 @@ func Save(ctx context.Context, gdb *gorm.DB, v Values) error {
 type Live struct {
 	DB      *gorm.DB
 	Install Values
-	// Applied is called with the values in force after a load or a save.
+	// Applied puts values in force: after a load, and in Set and Reset with
+	// the values about to be in force before they are saved or deleted, then
+	// again with the previous ones when that write fails. An error refuses
+	// the values and nothing is written.
 	Applied func(Values) error
 
 	mu    sync.RWMutex
 	cur   Values
 	saved bool
+	// writeMu serialises the writers (Start, Set, Update, Reset) across
+	// check, apply and save, so the sender in force and cur never come from
+	// two calls.
+	writeMu sync.Mutex
 }
 
 // Start reads the saved settings (or keeps the install's) and applies them.
 func (l *Live) Start(ctx context.Context) error {
+	l.writeMu.Lock()
+	defer l.writeMu.Unlock()
 	v, saved, err := Load(ctx, l.DB, l.Install)
 	if err != nil {
 		return err
@@ -163,21 +176,57 @@ func (l *Live) MetricsToken() string {
 	return v.MetricsToken
 }
 
-// Set checks, saves and applies v.
+// Set checks v, applies it and saves it; a save that fails puts the
+// previous values back in force, so the database never holds values that
+// are not.
 func (l *Live) Set(ctx context.Context, v Values) error {
+	l.writeMu.Lock()
+	defer l.writeMu.Unlock()
+	return l.set(ctx, v)
+}
+
+// Update is Set of what f makes of the values in force, read under the same
+// lock: two saves never merge into the same old values.
+func (l *Live) Update(ctx context.Context, f func(old Values) (Values, error)) error {
+	l.writeMu.Lock()
+	defer l.writeMu.Unlock()
+	old, _ := l.Get()
+	v, err := f(old)
+	if err != nil {
+		return err
+	}
+	return l.set(ctx, v)
+}
+
+// set is Set under writeMu.
+func (l *Live) set(ctx context.Context, v Values) error {
 	if err := v.Check(); err != nil {
 		return err
 	}
-	if err := Save(ctx, l.DB, v); err != nil {
+	prev, prevSaved := l.Get()
+	if err := l.apply(v, true); err != nil {
 		return err
 	}
-	return l.apply(v, true)
+	if err := save(ctx, l.DB, v); err != nil {
+		_ = l.apply(prev, prevSaved)
+		return err
+	}
+	return nil
 }
 
-// Reset forgets the admin's settings: the install's are in force again.
+// Reset forgets the admin's settings: the install's are in force again. As
+// in Set, the values are applied first and put back when the delete fails,
+// so a refused apply leaves the saved row as it was.
 func (l *Live) Reset(ctx context.Context) error {
-	if err := l.DB.WithContext(ctx).Where("key = ?", stateKey).Delete(&model.State{}).Error; err != nil {
+	l.writeMu.Lock()
+	defer l.writeMu.Unlock()
+	prev, prevSaved := l.Get()
+	if err := l.apply(l.Install, false); err != nil {
 		return err
 	}
-	return l.apply(l.Install, false)
+	if err := l.DB.WithContext(ctx).Where("key = ?", stateKey).Delete(&model.State{}).Error; err != nil {
+		_ = l.apply(prev, prevSaved)
+		return err
+	}
+	return nil
 }

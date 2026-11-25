@@ -338,9 +338,9 @@ func (h *Hints) Push(ctx context.Context) error {
 	return nil
 }
 
-// clientPrefixBits is the panel's rule (nx-panel pkg/coreapi
-// ClientPrefixBits), which the panel applies again whatever is sent: /24,
-// /48, and /40 for a 6to4 address, whose /48 is one IPv4 client.
+// clientPrefixBits is the panel's rule for a client prefix, which the panel
+// applies again whatever is sent: /24, /48, and /40 for a 6to4 address,
+// whose /48 is one IPv4 client.
 func clientPrefixBits(addr netip.Addr) int {
 	addr = addr.Unmap()
 	switch {

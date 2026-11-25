@@ -72,7 +72,7 @@ const on = computed({
 
 function batchState(b: CloudState['recent'][number]) {
   if (b.sentAt) return 'sent'
-  return b.nextAt > 1e15 ? 'refused' : 'pending'
+  return b.refused ? 'refused' : 'pending'
 }
 
 const shape = (c: { proto: string; transport: string; security: string; front: string }) =>
@@ -100,13 +100,16 @@ const shape = (c: { proto: string; transport: string; security: string; front: s
         :disabled="busy"
       />
       <small class="muted">{{ t('cloud.offHint') }}</small>
-      <p v-if="state.fingerprint">
-        {{ t('cloud.key') }}: <span class="mono ltr">{{ state.fingerprint }}</span> ·
-        <span :class="state.registered ? 'ok' : 'muted'">{{
+      <p v-if="state.fingerprint || state.removing">
+        <template v-if="state.fingerprint"
+          >{{ t('cloud.key') }}: <span class="mono ltr">{{ state.fingerprint }}</span> ·
+        </template>
+        <span v-if="state.removing" class="muted">{{ t('cloud.removing') }}</span>
+        <span v-else :class="state.registered ? 'ok' : 'muted'">{{
           state.registered ? t('cloud.registered') : t('cloud.notRegistered')
         }}</span>
       </p>
-      <Message v-if="state.on && state.error" severity="warn" :closable="false">
+      <Message v-if="state.error" severity="warn" :closable="false">
         <span class="ltr mono">{{ state.error }}</span>
       </Message>
       <p v-if="state.on" class="muted">
@@ -190,25 +193,17 @@ const shape = (c: { proto: string; transport: string; security: string; front: s
 
     <Message v-if="state?.on" severity="info" :closable="false">
       {{ t('cloud.reportMoved') }}
-      <RouterLink :to="{ name: 'analysis' }">{{ t('nav.analysis') }}</RouterLink>
+      <RouterLink :to="{ name: 'analysis', query: { tab: 'nx' } }">{{
+        t('nav.analysis')
+      }}</RouterLink>
     </Message>
   </div>
 </template>
 
 <style scoped>
 h1,
-h2,
-h3 {
+h2 {
   margin: 0;
-}
-h3 {
-  font-size: 1rem;
-}
-.head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 1rem;
 }
 .grid {
   border-collapse: collapse;
@@ -223,20 +218,6 @@ h3 {
 }
 .inner {
   font-size: 0.85rem;
-}
-.findings {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-.findings li {
-  display: flex;
-  gap: 0.6rem;
-  align-items: baseline;
-  flex-wrap: wrap;
 }
 .small {
   font-size: 0.85rem;

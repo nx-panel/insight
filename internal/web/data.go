@@ -185,10 +185,10 @@ type cellView struct {
 	Up         int64   `json:"up"`
 	Down       int64   `json:"down"`
 	Degraded   bool    `json:"degraded"`
-	// Kind is "endpoint" for a WireGuard, OpenVPN or OpenConnect
-	// endpoint's cell, which counts handshakes that worked and no failure
-	// (ingest.KindEndpoint); empty for an inbound, or when the panel did
-	// not say.
+	// Kind is "endpoint" for a WireGuard endpoint's cell, which counts
+	// handshakes that worked and no failure (ingest.Shape.HandshakeOnly);
+	// empty for an inbound, an OpenVPN or OpenConnect endpoint (they count
+	// like an inbound), or when the panel did not say.
 	Kind string `json:"kind,omitempty"`
 }
 
@@ -239,7 +239,9 @@ func (s *Server) handleMatrix(w http.ResponseWriter, r *http.Request, _ model.Ad
 	since := time.Now().Add(-time.Duration(hours) * time.Hour).Truncate(time.Hour).Unix()
 	var rows []matrixRow
 	if err := s.db.WithContext(r.Context()).Model(&model.PathHour{}).Select(sel).Where("hour >= ?", since).Group(group).
-		Order("SUM(accepted) DESC").Limit(matrixCells).Scan(&rows).Error; err != nil {
+		// A cell's weight is its connections: accepted, or authed for a cell
+		// with none accepted (an endpoint cell, WireGuard, has only handshakes).
+		Order("CASE WHEN SUM(accepted) > 0 THEN SUM(accepted) ELSE SUM(authed) END DESC").Limit(matrixCells).Scan(&rows).Error; err != nil {
 		serverError(w, err)
 		return
 	}
@@ -290,7 +292,7 @@ func (s *Server) handleMatrix(w http.ResponseWriter, r *http.Request, _ model.Ad
 			Accepted: r.Accepted, Authed: r.Authed, Failed: r.Failed, EarlyClose: r.EarlyClose, Up: r.Up, Down: r.Down,
 			Degraded: degraded[detect.Key{Node: r.NodeID, Inbound: r.Inbound, ASN: r.ClientASN, Network: r.Network}],
 		}
-		if sh, ok := shapes[r.NodeID][r.Inbound]; ok && sh.Kind == ingest.KindEndpoint {
+		if shapes[r.NodeID][r.Inbound].HandshakeOnly() {
 			c.Kind = ingest.KindEndpoint
 		}
 		if s.net != nil {

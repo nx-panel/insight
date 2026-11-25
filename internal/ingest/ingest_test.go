@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/netip"
 	"os"
@@ -191,12 +192,29 @@ func assertNoPrefix(t *testing.T, gdb *gorm.DB) {
 			}
 		}
 	}
-	var dump []map[string]any
-	gdb.Raw("SELECT * FROM path_hours").Scan(&dump)
-	for _, row := range dump {
-		for k, v := range row {
-			if s, ok := v.(string); ok && strings.HasPrefix(s, "5.160.") {
-				t.Errorf("path_hours.%s holds %q", k, s)
+	for _, table := range []string{"path_hours", "path_sig_hours", "tunnel_hours", "cloud_outbox"} {
+		var dump []map[string]any
+		gdb.Raw("SELECT * FROM " + table).Scan(&dump)
+		for _, row := range dump {
+			for k, v := range row {
+				var s string
+				switch x := v.(type) {
+				case string:
+					s = x
+				case []byte:
+					// The outbox body is a gzipped batch.
+					if zr, err := gzip.NewReader(bytes.NewReader(x)); err == nil {
+						raw, _ := io.ReadAll(zr)
+						s = string(raw)
+					} else {
+						s = string(x)
+					}
+				default:
+					continue
+				}
+				if strings.Contains(s, "5.160.") {
+					t.Errorf("%s.%s holds %q", table, k, s)
+				}
 			}
 		}
 	}
@@ -265,6 +283,34 @@ func TestPollStates(t *testing.T) {
 	unregistered := &Ingest{Now: atHour, DB: gdb, Panel: func() Getter { return nil }}
 	if err := unregistered.Poll(t.Context()); err != nil || unregistered.Status().State != StateWaiting {
 		t.Fatalf("unregistered: %v %+v", err, unregistered.Status())
+	}
+}
+
+// TestReadyAfterTheFirstPollIsWorkedThrough: not before a poll reached the
+// panel, not after one before its flush, and only once the flush and what
+// follows it have run.
+func TestReadyAfterTheFirstPollIsWorkedThrough(t *testing.T) {
+	ctx := t.Context()
+	fp := &fakePanel{status: http.StatusBadGateway}
+	var readyInAfterFlush []bool
+	in := &Ingest{Now: atHour, DB: openDB(t), Net: netDB(t), Panel: func() Getter { return fp }}
+	in.AfterFlush = func(context.Context) { readyInAfterFlush = append(readyInAfterFlush, in.Ready()) }
+	if in.Ready() {
+		t.Fatal("ready before any poll")
+	}
+	_ = in.Poll(ctx) // the panel does not answer
+	if err := in.flushRound(ctx); err != nil || in.Ready() {
+		t.Fatalf("after a failed poll and a flush: err %v, ready %v", err, in.Ready())
+	}
+	fp.status = 0
+	if err := in.Poll(ctx); err != nil || in.Ready() {
+		t.Fatalf("after a poll, before its flush: err %v, ready %v", err, in.Ready())
+	}
+	if err := in.flushRound(ctx); err != nil || !in.Ready() {
+		t.Fatalf("after the flush: err %v, ready %v", err, in.Ready())
+	}
+	if len(readyInAfterFlush) != 2 || readyInAfterFlush[1] {
+		t.Fatalf("ready during AfterFlush: %v, want it only after", readyInAfterFlush)
 	}
 }
 

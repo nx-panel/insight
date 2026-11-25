@@ -95,7 +95,7 @@ func (PathSigHour) TableName() string { return "path_sig_hours" }
 
 // sigClasses are the failure classes a node counts by signature, and
 // sigBytes and sigSeconds the lower edges of their buckets
-// (nx-panel pkg/coreapi PathSample.FailedSig).
+// (the classes and buckets the panel's path sample counts by).
 var (
 	sigClasses = map[string]bool{"tls": true, "auth": true, "timeout": true, "reset": true, "eof": true, "ingress_noroute": true, "quic_initial_bad": true}
 	sigBytes   = map[string]bool{"0": true, "1": true, "64": true, "1024": true}
@@ -267,7 +267,24 @@ type CloudOutbox struct {
 
 func (CloudOutbox) TableName() string { return "cloud_outbox" }
 
+// HourMark is one thing an evaluation in an hour found, kept for Mode B's
+// batch of that hour: a degraded path (Kind "degraded"), a client network
+// in an outage ("outage": ASN only), a node whose address read as blocked
+// ("blocked": NodeID only), a relay whose tunnel was down ("cut": NodeID
+// only). Mode B keeps them for the hours it can still build, none while
+// off.
+type HourMark struct {
+	Hour    int64  `gorm:"primaryKey;autoIncrement:false"`
+	Kind    string `gorm:"primaryKey;size:8"`
+	NodeID  uint   `gorm:"primaryKey;autoIncrement:false"`
+	Inbound string `gorm:"primaryKey;size:128"`
+	ASN     uint32 `gorm:"primaryKey;column:asn;autoIncrement:false"`
+	Network string `gorm:"primaryKey;size:4"`
+}
+
+func (HourMark) TableName() string { return "hour_marks" }
+
 // All is every table, for the migration.
 func All() []any {
-	return []any{&PathHour{}, &PathDay{}, &PathSigHour{}, &TunnelHour{}, &CloudOutbox{}, &NodeNetinfo{}, &State{}, &Admin{}, &Session{}}
+	return []any{&PathHour{}, &PathDay{}, &PathSigHour{}, &TunnelHour{}, &CloudOutbox{}, &HourMark{}, &NodeNetinfo{}, &State{}, &Admin{}, &Session{}}
 }
