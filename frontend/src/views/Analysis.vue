@@ -20,7 +20,7 @@ import {
   type CloudState,
   type NodeInfo,
 } from '../api'
-import { asnShort, countryName, num, when } from '../format'
+import { asnShort, asnTagged, countryName, num, when } from '../format'
 import NetName from '../components/NetName.vue'
 
 // The results of the two readings: the admin's own model (Mode A, set up on
@@ -163,11 +163,14 @@ function strategy(s: string) {
   })
 }
 
+// A report's own name for a network, or this install's when NX sent none.
+const nxOrg = (asn: number, org: string) => org || cloud.value?.orgs?.[String(asn)] || ''
+
 function nxSentence(f: CloudFinding) {
   return t('cloud.finding.' + f.code, {
-    asn: asnShort(f.asn, f.org),
+    asn: asnTagged(f.asn, nxOrg(f.asn, f.org)),
     strategy: strategy(f.strategy),
-    host: 'AS' + f.node_asn,
+    host: asnTagged(f.node_asn, nxOrg(f.node_asn, '')),
   })
 }
 </script>

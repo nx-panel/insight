@@ -350,6 +350,8 @@ export interface CloudState {
   lastSent: CloudBatch | null
   recent: CloudBatch[]
   report: { report: CloudReport | null; checkedAt: number; latest: number; error?: string }
+  // The report's networks named from this install's own ASN table, by AS number.
+  orgs?: Record<string, string>
 }
 
 // The settings page (internal/settings): a secret only as whether one is set.

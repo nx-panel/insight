@@ -31,6 +31,13 @@ export function asnLabel(asn: number, org: string) {
   return org ? `AS${asn} · ${org}` : `AS${asn}`
 }
 
+// asnTagged is a network's AS number with its short name beside it, the
+// number alone when it has no name.
+export function asnTagged(asn: number, org: string) {
+  if (!asn) return i18n.global.t('matrix.otherAsn')
+  return org ? `AS${asn} (${asnName(asn, org)})` : `AS${asn}`
+}
+
 // asnShort is a network's short name (asn.ts), the "other" bucket's in the
 // admin's language. The full name and number are asnLabel's, for a tooltip.
 export function asnShort(asn: number, org: string) {

@@ -23,6 +23,11 @@ func (s *Server) mountCloud(mux *http.ServeMux) {
 type cloudView struct {
 	cloud.Status
 	Report cloud.Held `json:"report"`
+	// Orgs names the report's networks from this install's own ASN table,
+	// by AS number: NX leaves a finding's org empty when too few
+	// contributors sent the same name, and the report itself stays as NX
+	// signed it.
+	Orgs map[string]string `json:"orgs"`
 }
 
 func (s *Server) cloudView(r *http.Request) (cloudView, error) {
@@ -30,7 +35,30 @@ func (s *Server) cloudView(r *http.Request) (cloudView, error) {
 	if err != nil {
 		return cloudView{}, err
 	}
-	return cloudView{Status: st, Report: s.cloud.Held(r.Context())}, nil
+	held := s.cloud.Held(r.Context())
+	return cloudView{Status: st, Report: held, Orgs: s.reportOrgs(held.Report)}, nil
+}
+
+// reportOrgs is the local name of every network a report names, its
+// clients' and its hosts'.
+func (s *Server) reportOrgs(rep *cloud.Report) map[string]string {
+	orgs := map[string]string{}
+	if rep == nil || s.net == nil {
+		return orgs
+	}
+	for _, c := range rep.Countries {
+		for _, f := range c.Findings {
+			for _, asn := range []uint32{f.ASN, f.NodeASN} {
+				if asn == 0 {
+					continue
+				}
+				if org := s.net.Org(asn); org != "" {
+					orgs[strconv.FormatUint(uint64(asn), 10)] = org
+				}
+			}
+		}
+	}
+	return orgs
 }
 
 // handleCloudGet is GET /api/cloud. Opening the page is also the moment
